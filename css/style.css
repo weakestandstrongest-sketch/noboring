@@ -376,6 +376,48 @@ body[data-tone="light"] .tabbar {
 .wx-swap { animation: wx-swap .35s cubic-bezier(.2,.8,.2,1); }
 @keyframes wx-swap { from { opacity: .3; transform: scale(.97); } }
 
+/* ---------- weather detail pages ---------- */
+.wxd { display: none; }
+.weather.detail .wx-cond, .weather.detail .wx-scrub { display: none; }
+.weather.detail .wx-3d { flex: 0 0 40%; }
+.weather.detail .wxd { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; padding: 4px 22px 0; touch-action: pan-y; animation: fade .35s; }
+.wxd-body { animation: wxd-in .35s cubic-bezier(.2, .8, .2, 1); }
+.wxd-body.in-right { animation-name: wxd-in-right; }
+.wxd-body.in-left { animation-name: wxd-in-left; }
+@keyframes wxd-in { from { opacity: 0; } }
+@keyframes wxd-in-right { from { opacity: 0; transform: translateX(40px); } }
+@keyframes wxd-in-left { from { opacity: 0; transform: translateX(-40px); } }
+.wxd h2 { margin: 0 0 8px; font-size: 30px; font-weight: 800; letter-spacing: .02em; }
+.wxd-rows { display: flex; flex-direction: column; gap: 1px; }
+.wxd-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 9px; font-size: 12px; }
+.wxd-row i { flex: 1; border-bottom: 1px solid rgba(127,127,127,.3); transform: translateY(-3px); }
+.wxd-row b { font-family: var(--mono); font-weight: 500; letter-spacing: .04em; }
+.wxd-row.head { background: #1d1d1d; color: #fff; border-radius: 8px; padding: 4px 9px; margin-bottom: 2px; }
+.wxd-row.head i { visibility: hidden; }
+.night .wxd-row.head { background: #f2f2f2; color: #111; }
+.wxd-x { position: relative; height: 18px; margin: 12px 34px 2px 0; font-family: var(--mono); font-size: 11px; }
+.wxd-x span { position: absolute; transform: translateX(-50%); padding: 0 6px; border-radius: 8px; line-height: 18px; white-space: nowrap; }
+.wxd-x span.on { background: #1d1d1d; color: #fff; }
+.night .wxd-x span.on { background: #f2f2f2; color: #111; }
+.wxd-chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.wxd-chart path.line { fill: none; stroke-width: 2; stroke-linecap: round; }
+.wxd-chart path.line.ink { stroke: currentColor; }
+.wxd-chart path.line.soft { stroke: rgba(127,127,127,.55); }
+.wxd-chart path.area.blue { fill: #3b8cff; }
+.wxd-chart path.area.grey { fill: rgba(127,127,127,.45); }
+.wxd-chart path.area.ink { fill: currentColor; opacity: .85; }
+.wxd-chart circle.dot { fill: currentColor; stroke: #fff; stroke-width: 2; }
+.night .wxd-chart circle.dot { stroke: #1f1f1f; }
+.wxd-chart text { font-family: var(--mono); font-size: 10px; fill: currentColor; opacity: .7; }
+.wxd-scrub { position: relative; height: 26px; margin: 4px 34px 0 0; touch-action: none; cursor: pointer; }
+.wxd-scrub .dots i { position: absolute; top: 50%; width: 3px; height: 3px; border-radius: 50%; background: rgba(127,127,127,.55); transform: translate(-50%, -50%); }
+.wxd-scrub .fill { position: absolute; left: 0; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px; background: currentColor; }
+.wxd-scrub .wxd-knob { position: absolute; top: 50%; width: 20px; height: 20px; border-radius: 50%; background: currentColor; transform: translate(-50%, -50%); box-shadow: 0 2px 6px rgba(0,0,0,.25); }
+.wxd-range { display: flex; justify-content: center; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; }
+.wxd-switch { position: relative; width: 38px; height: 22px; border-radius: 11px; background: rgba(127,127,127,.28); }
+.wxd-switch i { position: absolute; left: 2px; top: 2px; width: 18px; height: 18px; border-radius: 50%; background: currentColor; transition: left .35s cubic-bezier(.34, 1.45, .5, 1); }
+.wxd-switch.on i { left: 18px; }
+
 /* ---------- habits ---------- */
 .habit-name-btn { position: absolute; left: 50%; transform: translateX(-50%); font-size: 15px; max-width: 52%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 6px; }
 .habit-name-btn.done { text-decoration: line-through; text-decoration-thickness: 1.5px; }

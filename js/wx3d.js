@@ -179,7 +179,7 @@ export function createWeather3D(container, { onTap } = {}) {
   }
 
   // a cloud: a heap of squashed matte lumps, biggest in the middle
-  function cloudMass(r, cx, cy, cz, width, lumps, size, m) {
+  function cloudMass(r, cx, cy, cz, width, lumps, size, m, parent = art) {
     const g = new THREE.Group();
     for (let i = 0; i < lumps; i++) {
       const t = lumps === 1 ? 0.5 : i / (lumps - 1);
@@ -190,7 +190,7 @@ export function createWeather3D(container, { onTap } = {}) {
       add(g, sphereGeo, m, [x, y, (r() - 0.5) * size * 0.8], [s * (1.05 + r() * 0.25), s * 0.85, s]);
     }
     g.position.set(cx, cy, cz);
-    art.add(g);
+    parent.add(g);
     floaters.push([g, cx, cy, r() * 6, 0.15 + r() * 0.15]);
   }
 
@@ -258,11 +258,9 @@ export function createWeather3D(container, { onTap } = {}) {
 
   let font = null;
   let text = '';
-  async function setText(t) {
-    text = t;
+  // tall chamfered numerals, `height` units tall, standing on y = 0
+  async function digitMesh(t, height) {
     font ||= await loadFont();
-    if (text !== t) return;
-    clearGroup(digits);
     const shapes = textShapes(font, t, 1);
     // one flat bevel segment = crisp 45° chamfers on every edge
     const geo = new THREE.ExtrudeGeometry(shapes, {
@@ -270,13 +268,144 @@ export function createWeather3D(container, { onTap } = {}) {
     });
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
-    const s = (DIGIT_TOP + 4.2) / (bb.max.y - bb.min.y);
+    const s = height / (bb.max.y - bb.min.y);
     geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
     const m = new THREE.Mesh(geo, mat.digit);
     m.scale.set(s * 0.62, s, 1.4 / 0.3); // tall, narrow, ~1.4 units deep
-    m.position.y = -4.2;
     m.castShadow = true;
+    return m;
+  }
+  async function setText(t) {
+    text = t;
+    const m = await digitMesh(t, DIGIT_TOP + 4.2);
+    if (text !== t) { m.geometry.dispose(); return; }
+    clearGroup(digits);
+    m.position.y = -4.2;
     digits.add(m);
+  }
+
+  // ----- detail pages: one model per page, slid in sideways -----
+  let mode = 'hero';
+  let detailGroup = null, leaving = null, slide = 1, slideDir = 1;
+  const spinners = [];   // [object, speed]
+  const detailRain = []; // [mesh, speed, phase]
+  let vane = null;
+  const rockMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.85, flatShading: true, bumpMap: grain, bumpScale: 0.4 });
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.35, metalness: 0.4 });
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x8fc4ff, roughness: 0.15, transparent: true, opacity: 0.85 });
+
+  // a floating chunk of rock: flat top, jagged underside
+  function rock(r) {
+    const geo = new THREE.CylinderGeometry(3.2, 0.9, 1.9, 11, 3, false);
+    const pos = geo.attributes.position;
+    for (let i = 0; i < pos.count; i++) {
+      const y = pos.getY(i);
+      if (y < 0.9) {
+        const k = (0.9 - y) / 1.9;
+        pos.setX(i, pos.getX(i) * (0.85 + r() * 0.3));
+        pos.setZ(i, pos.getZ(i) * (0.85 + r() * 0.3));
+        pos.setY(i, y - r() * 0.9 * k);
+      }
+    }
+    geo.computeVertexNormals();
+    const m = new THREE.Mesh(geo, rockMat);
+    m.castShadow = m.receiveShadow = true;
+    return m;
+  }
+
+  function anemometer(g) {
+    add(g, new THREE.CylinderGeometry(0.06, 0.06, 6.2, 12), metalMat, [0, -0.6, 0]);
+    const head = new THREE.Group();
+    head.position.y = 2.5;
+    g.add(head);
+    add(head, sphereGeo, metalMat, [0, 0, 0], 0.18);
+    const cupGeo = new THREE.SphereGeometry(0.42, 24, 12, 0, Math.PI);
+    for (let i = 0; i < 3; i++) {
+      const arm = new THREE.Group();
+      arm.rotation.y = (i / 3) * Math.PI * 2;
+      head.add(arm);
+      add(arm, new THREE.CylinderGeometry(0.035, 0.035, 1.5, 8), metalMat, [0.75, 0, 0]).rotation.z = Math.PI / 2;
+      const cup = add(arm, cupGeo, mat.cloud, [1.5, 0, 0]);
+      cup.rotation.y = Math.PI / 2;
+    }
+    spinners.push([head, 0]);
+    // wind vane: an arrow that turns to face the wind
+    vane = new THREE.Group();
+    vane.position.y = 0.6;
+    g.add(vane);
+    add(vane, new THREE.BoxGeometry(2.6, 0.05, 0.05), metalMat, [0, 0, 0]);
+    add(vane, new THREE.BoxGeometry(0.05, 0.9, 0.9), mat.cloud, [-1.2, 0, 0]).rotation.x = Math.PI / 4;
+    add(vane, new THREE.ConeGeometry(0.14, 0.4, 12), metalMat, [1.4, 0, 0]).rotation.z = -Math.PI / 2;
+    // a thin ring sweeping round the mast
+    const ring = add(g, new THREE.TorusGeometry(2.6, 0.03, 8, 96), metalMat, [0, 0.6, 0]);
+    ring.rotation.x = Math.PI / 2;
+    ring.castShadow = false;
+  }
+
+  function buildDetail(page, info) {
+    const g = new THREE.Group();
+    const r = rng(17 + page.length * 13);
+    spinners.length = 0;
+    detailRain.length = 0;
+    vane = null;
+    if (page === 'sun') add(g, sphereGeo, mat.sun, [0, 0.2, 0], 2.7);
+    else if (page === 'moon') add(g, sphereGeo, mat.moonPhase, [0, 0.2, 0], 2.7);
+    else if (page === 'cloud') {
+      const c = Math.max(0.15, Math.min(1, info.cloud / 100));
+      cloudMass(r, -1.4, 0.4, 0.6, 3.6 * (0.6 + c * 0.4), 5, 0.9 + c * 0.5, mat.cloud, g);
+      if (c > 0.35) cloudMass(r, 2.0, 1.1, -0.2, 2.6, 4, 0.7 + c * 0.4, mat.cloud, g);
+      if (c > 0.7) cloudMass(r, 0.2, -0.6, 1.4, 3.4, 5, 0.9, mat.cloud, g);
+    } else if (page === 'air') {
+      anemometer(g);
+    } else if (page === 'precip') {
+      const isl = rock(r);
+      isl.position.y = -1.2;
+      g.add(isl);
+      if (info.rain > 0) {
+        const pool = add(g, new THREE.CylinderGeometry(2.4, 2.4, 0.08, 40), waterMat, [0, -0.2, 0]);
+        pool.scale.setScalar(Math.min(1, 0.4 + info.rain / 6));
+        pool.castShadow = false;
+        const n = Math.min(26, 6 + Math.round(info.rain * 5));
+        for (let i = 0; i < n; i++) {
+          const m = add(g, info.snow ? sphereGeo : dropGeo, info.snow ? mat.snow : mat.drop, [-2.4 + r() * 4.8, 0, -1.4 + r() * 2.8], info.snow ? 0.12 : 1.2);
+          detailRain.push([m, info.snow ? 1.2 : 4.5, r()]);
+        }
+      }
+    } else if (page === 'temp') {
+      digitMesh(String(info.temp), 5.6).then((m) => {
+        if (!g.parent) { m.geometry.dispose(); return; }
+        m.position.y = -2.6;
+        g.add(m);
+      });
+    }
+    return g;
+  }
+
+  function setDetail(page, info, dir = 0) {
+    if (!page) {
+      mode = 'hero';
+      for (const x of [detailGroup, leaving]) if (x) { spin.remove(x); clearGroup(x); }
+      detailGroup = leaving = null;
+      art.visible = digits.visible = true;
+      resize();
+      return;
+    }
+    const first = mode !== 'detail';
+    mode = 'detail';
+    art.visible = digits.visible = false;
+    if (leaving) { spin.remove(leaving); clearGroup(leaving); }
+    leaving = first ? null : detailGroup;
+    detailGroup = buildDetail(page, info);
+    spin.add(detailGroup);
+    slideDir = dir || 1;
+    slide = dir && !first ? 0 : 1;
+    tuneAir(info);
+    resize();
+  }
+  // wind changes without rebuilding: turn the vane, speed up the cups
+  function tuneAir(info) {
+    if (vane) vane.rotation.y = -((info.dir ?? 0) * Math.PI) / 180 + Math.PI / 2;
+    if (spinners[0]) spinners[0][1] = 0.6 + Math.min(6, info.wind ?? 0) * 0.9;
   }
 
   function setNight(night) {
@@ -297,13 +426,14 @@ export function createWeather3D(container, { onTap } = {}) {
     canvas.style.width = `${w}px`;
     canvas.style.height = `${hgt}px`;
     camera.aspect = w / hgt;
-    // fit the 9.6 × 14.6 column (sky + numerals) into the view
+    // hero: fit the 9.6 × 14.6 column (sky + numerals); detail: a 9 × 7.4 box round the model
     const vFov = THREE.MathUtils.degToRad(camera.fov);
-    const distH = 7.3 / Math.tan(vFov / 2);
-    const distW = 4.8 / (Math.tan(vFov / 2) * camera.aspect);
+    const [hw, hh, cy] = mode === 'detail' ? [4.5, 3.7, 0.3] : [4.8, 7.3, 3.0];
+    const distH = hh / Math.tan(vFov / 2);
+    const distW = hw / (Math.tan(vFov / 2) * camera.aspect);
     const d = Math.max(distH, distW) * 1.02;
-    camera.position.set(0, 3.1, d);
-    camera.lookAt(0, 3.0, 0);
+    camera.position.set(0, cy + 0.1, d);
+    camera.lookAt(0, cy, 0);
     camera.updateProjectionMatrix();
   }
   const ro = new ResizeObserver(resize);
@@ -367,6 +497,21 @@ export function createWeather3D(container, { onTap } = {}) {
       m.position.y = SKY_Y - 2 - f[2] * 5;
       m.visible = f[2] < 0.9;
     }
+    if (detailGroup) {
+      if (slide < 1) {
+        slide = Math.min(1, slide + dt / 0.45);
+        const e = 1 - (1 - slide) ** 3;
+        detailGroup.position.x = slideDir * 12 * (1 - e);
+        if (leaving) leaving.position.x = -slideDir * 12 * e;
+        if (slide >= 1 && leaving) { spin.remove(leaving); clearGroup(leaving); leaving = null; }
+      }
+      for (const sp of spinners) sp[0].rotation.y -= sp[1] * dt;
+      for (const f of detailRain) {
+        f[2] = (f[2] + dt * f[1] / 4) % 1;
+        f[0].position.y = 4.2 - f[2] * 4.4;
+        f[0].visible = f[2] < 0.95;
+      }
+    }
     if (flash > 0) {
       flash = Math.max(0, flash - dt * 2.2);
       const k = flash * flash;
@@ -385,10 +530,15 @@ export function createWeather3D(container, { onTap } = {}) {
       mat.moonPhase.uniforms.sunDir.value.set(Math.sin(a), 0, -Math.cos(a)).normalize();
     },
     setText,
+    setDetail,
+    tuneAir,
     destroy() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       clearGroup(art); clearGroup(digits);
+      if (detailGroup) clearGroup(detailGroup);
+      if (leaving) clearGroup(leaving);
+      [rockMat, metalMat, waterMat].forEach((m) => m.dispose());
       Object.values(mat).forEach((m) => m.dispose());
       shared.forEach((g) => g.dispose());
       grain.dispose();

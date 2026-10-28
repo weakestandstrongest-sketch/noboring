@@ -1,4 +1,5 @@
 import { h, emboss, setEmboss, iconBtn, icons, topbar, sheet, store, toast, tick, pop } from './ui.js';
+import { PAGES, createPanel, model as detailModel, sceneInfo } from './wxdetail.js';
 
 // WMO weather codes → [label, kind]
 const CODES = {
@@ -112,10 +113,11 @@ const SUN_ICON = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#ff
 async function fetchForecast(place, unit) {
   const p = new URLSearchParams({
     latitude: place.lat, longitude: place.lon, timezone: 'auto', forecast_days: 7,
-    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m,cloud_cover',
-    hourly: 'temperature_2m,weather_code,precipitation_probability,is_day,cloud_cover',
-    daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset',
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m,wind_gusts_10m,wind_direction_10m,pressure_msl,cloud_cover',
+    hourly: 'temperature_2m,apparent_temperature,relative_humidity_2m,dew_point_2m,weather_code,precipitation,precipitation_probability,is_day,cloud_cover,wind_speed_10m,wind_gusts_10m,wind_direction_10m,visibility,pressure_msl,uv_index',
+    daily: 'weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,precipitation_sum,precipitation_probability_max,uv_index_max,sunrise,sunset,wind_speed_10m_max,wind_gusts_10m_max,wind_direction_10m_dominant,cloud_cover_mean',
     temperature_unit: unit === 'F' ? 'fahrenheit' : 'celsius',
+    wind_speed_unit: 'ms',
   });
   const r = await fetch(`https://api.open-meteo.com/v1/forecast?${p}`);
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -183,7 +185,7 @@ export default function weather({ setTone }) {
     }
     placeBtn.innerHTML = '';
     placeBtn.append(...(place.gps ? [h('span', { html: icons.location })] : []), place.name);
-    const key = `${place.lat},${place.lon},${unit()}`;
+    const key = `${place.lat},${place.lon},${unit()},v2`;
     const cached = store.get('weather.cache', null);
     if (cached?.key === key) build(cached.data);
     else message('読み込み中…');
@@ -197,6 +199,39 @@ export default function weather({ setTone }) {
       if (!cached || cached.key !== key) message('天気を取得できませんでした。\n通信状況を確認してください。', load);
       else toast('オフライン: 前回のデータを表示中');
     }
+  }
+
+  // detail pages, opened by tapping the numerals
+  const dstate = { on: false, page: 0, range: 'day', index: 0 };
+  let dm = null, panel = null, lastDetailKey = '';
+
+  function toggleDetail() {
+    dstate.on = !dstate.on;
+    el.classList.toggle('detail', dstate.on);
+    tick(1200);
+    if (dstate.on) {
+      dstate.index = sel ?? 0;
+      dstate.range = 'day';
+      panel.render();
+      lastDetailKey = '';
+      syncDetail(0);
+    } else {
+      hero?.setDetail(null);
+      shownKey = '';
+      show(sel);
+    }
+  }
+
+  function syncDetail(dir = 0) {
+    if (!hero || !dstate.on) return;
+    const pg = PAGES[dstate.page].id;
+    const info = sceneInfo(pg, dm, dstate.range, dstate.index);
+    const bucket = { temp: info.temp, precip: `${Math.round(info.rain * 2)}${info.snow}`, cloud: Math.round(info.cloud / 20) }[pg] ?? '';
+    const key = `${pg}:${bucket}`;
+    if (dir || key !== lastDetailKey) hero.setDetail(pg, info, dir);
+    else if (pg === 'air') hero.tuneAir(info);
+    lastDetailKey = key;
+    hero.setMoonPhase(info.phase);
   }
 
   // hero pieces, rebuilt by build() and updated by show()
@@ -225,11 +260,11 @@ export default function weather({ setTone }) {
     const stage3d = h('div', { class: 'wx-3d' });
     try {
       if (!mod) throw new Error('3D unavailable');
-      hero = mod.createWeather3D(stage3d, { onTap: () => tick() });
+      hero = mod.createWeather3D(stage3d, { onTap: toggleDetail });
     } catch {
       artBox = h('div', { class: 'wx-art' });
       tempNum = emboss('0', { variant: 'ink' });
-      tempNum.addEventListener('click', () => { pop(tempNum.firstElementChild); tick(); });
+      tempNum.addEventListener('click', () => { pop(tempNum.firstElementChild); toggleDetail(); });
       stage3d.classList.add('flat');
       stage3d.append(artBox, h('div', { class: 'wx-temp' }, tempNum));
     }
@@ -265,9 +300,12 @@ export default function weather({ setTone }) {
       labels);
     bindScrub();
 
-    main.replaceChildren(stage3d, condEl, scrub);
+    dm = detailModel(d);
+    panel = createPanel({ getModel: () => dm, state: dstate, onChange: (st, dir) => syncDetail(dir) });
+    main.replaceChildren(stage3d, condEl, scrub, panel.el);
     shownKey = '';
     show(null);
+    if (dstate.on) { panel.render(); lastDetailKey = ''; syncDetail(0); }
   }
 
   function show(i) {
@@ -360,7 +398,7 @@ export default function weather({ setTone }) {
       p.append(h('h4', {}, 'DETAILS'), h('div', { class: 'wx-stats' },
         stat('体感', `${Math.round(c.apparent_temperature)}°`),
         stat('湿度', `${c.relative_humidity_2m}`, '%'),
-        stat('風速', `${Math.round(c.wind_speed_10m)}`, 'km/h'),
+        stat('風速', `${Math.round(c.wind_speed_10m)}`, 'm/s'),
         stat('降水確率', `${d.daily.precipitation_probability_max?.[0] ?? 0}`, '%'),
         stat('日の出', hm(d.daily.sunrise?.[0])),
         stat('日の入り', hm(d.daily.sunset?.[0])),
