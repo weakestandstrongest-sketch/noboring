@@ -60,8 +60,8 @@ export function createWeather3D(container, { onTap } = {}) {
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.05;
+  // no filmic tone mapping: keeps the whites white and the red vivid, like a bright studio shot
+  renderer.toneMapping = THREE.NoToneMapping;
   const canvas = renderer.domElement;
   canvas.style.touchAction = 'none';
   container.append(canvas);
@@ -70,20 +70,25 @@ export function createWeather3D(container, { onTap } = {}) {
   const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 200);
   const grain = grainTexture();
 
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x9a9a9a, 1.5);
-  const key = new THREE.DirectionalLight(0xffffff, 2.6);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0xe4e4e4, 1.7);
+  const key = new THREE.DirectionalLight(0xffffff, 1.9);
   key.position.set(-6, 14, 10);
   key.castShadow = true;
   key.shadow.mapSize.set(1024, 1024);
   key.shadow.camera.left = -10; key.shadow.camera.right = 10;
   key.shadow.camera.top = 12; key.shadow.camera.bottom = -8;
-  key.shadow.radius = 6;
+  key.shadow.radius = 8;
   key.shadow.bias = -0.0008;
-  const rim = new THREE.DirectionalLight(0xffffff, 0.6);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.75);
+  fill.position.set(6, 3, 12);
+  const rim = new THREE.DirectionalLight(0xffffff, 0.5);
   rim.position.set(8, 4, -6);
-  scene.add(hemi, key, rim);
+  // warm bounce from the sun onto the tops of the numerals
+  const glow = new THREE.PointLight(0xff2a2a, 0, 7, 1.6);
+  glow.position.set(0, 3.4, 1.6);
+  scene.add(hemi, key, fill, rim, glow);
 
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.ShadowMaterial({ opacity: 0.16 }));
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.ShadowMaterial({ opacity: 0.09 }));
   ground.rotation.x = -Math.PI / 2;
   ground.position.y = -3.35;
   ground.receiveShadow = true;
@@ -92,22 +97,31 @@ export function createWeather3D(container, { onTap } = {}) {
   const spin = new THREE.Group();     // rotated by the user
   const art = new THREE.Group();
   const digits = new THREE.Group();
-  art.position.y = 0.7; // keep the sky clear of the numerals
+  art.position.y = 0.9; // keep the sky clear of the numerals
   spin.add(art, digits);
   scene.add(spin);
 
   const mat = {
-    sun: new THREE.MeshStandardMaterial({ color: 0xff1a24, roughness: 0.78, bumpMap: grain, bumpScale: 0.6, emissive: 0x330000 }),
-    moon: new THREE.MeshStandardMaterial({ color: 0xf1f2ef, roughness: 0.92, bumpMap: grain, bumpScale: 0.6, emissive: 0x222222 }),
-    cloud: new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.42, bumpMap: grain, bumpScale: 0.4 }),
-    cloudLight: new THREE.MeshStandardMaterial({ color: 0xe9e9e9, roughness: 0.6, bumpMap: grain, bumpScale: 0.4 }),
-    streak: new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.4 }),
-    drop: new THREE.MeshStandardMaterial({ color: 0x2f7fe0, roughness: 0.3 }),
-    snow: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8 }),
-    bolt: new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.5, emissive: 0x664400 }),
-    digit: new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.5, bumpMap: grain, bumpScale: 0.25 }),
+    sun: new THREE.MeshStandardMaterial({ color: 0xff2b2b, roughness: 0.62, bumpMap: grain, bumpScale: 0.35, emissive: 0x7a0606 }),
+    moon: new THREE.MeshStandardMaterial({ color: 0xf7f7f2, roughness: 0.9, bumpMap: grain, bumpScale: 0.4, emissive: 0x3a3a36 }),
+    crater: new THREE.MeshStandardMaterial({ color: 0xd9dad3, roughness: 0.95 }),
+    cloud: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.36, bumpMap: grain, bumpScale: 0.2 }),
+    cloudLight: new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.55, bumpMap: grain, bumpScale: 0.2 }),
+    streak: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.4 }),
+    drop: new THREE.MeshStandardMaterial({ color: 0x3b8cff, roughness: 0.25, emissive: 0x0a2a66 }),
+    snow: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, emissive: 0x333333 }),
+    star: new THREE.MeshStandardMaterial({ color: 0xfff6c8, emissive: 0xfff0a0, emissiveIntensity: 0.8 }),
+    bolt: new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.45, emissive: 0x8a6400 }),
+    digit: new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.38, metalness: 0.05, bumpMap: grain, bumpScale: 0.12 }),
   };
   const sphereGeo = new THREE.SphereGeometry(1, 64, 48);
+  const arcGeo = new THREE.TorusGeometry(1.2, 0.085, 12, 40, 0.9);
+  // teardrop raindrop: a lathe profile, round at the bottom and pointed on top
+  const dropGeo = new THREE.LatheGeometry(
+    Array.from({ length: 14 }, (_, i) => {
+      const t = i / 13;
+      return new THREE.Vector2(Math.sin(Math.PI * t) * (1 - t * 0.85) * 0.16, -0.16 + t * 0.5);
+    }), 20);
 
   function add(group, geo, material, pos, scale = 1) {
     const m = new THREE.Mesh(geo, material);
@@ -119,65 +133,102 @@ export function createWeather3D(container, { onTap } = {}) {
     return m;
   }
 
-  const floaters = [];  // [mesh, baseY, phase]
+  const floaters = [];  // [object, baseX, baseY, phase, drift]
   const fallers = [];   // [mesh, x, z, speed, phase]
+  const twinklers = []; // [mesh, phase]
+  let breather = null;  // sun/moon gently breathes
 
   function clearGroup(g) {
     for (const c of [...g.children]) {
       g.remove(c);
-      if (c.geometry && c.geometry !== sphereGeo) c.geometry.dispose();
+      c.traverse?.((o) => { if (o.geometry && ![sphereGeo, arcGeo, dropGeo].includes(o.geometry)) o.geometry.dispose(); });
     }
+  }
+
+  // a puffy cloud: one big ball, two shoulders and a couple of little bumps, flat-ish bottom
+  function puff(x, y, z, size, m) {
+    const g = new THREE.Group();
+    const balls = [[0, 0.25, 0, 1], [-0.9, -0.05, 0.1, 0.72], [0.95, -0.02, 0.05, 0.78], [-1.6, -0.3, 0.2, 0.42], [1.7, -0.28, 0.15, 0.45], [0.2, -0.35, 0.45, 0.62]];
+    for (const [bx, by, bz, r] of balls) add(g, sphereGeo, m, [bx, by, bz], [r, r * 0.9, r]);
+    g.position.set(x, y, z);
+    g.scale.setScalar(size);
+    art.add(g);
+    floaters.push([g, x, y, Math.random() * 6, 0.12 + Math.random() * 0.1]);
+    return g;
+  }
+  function swoosh(x, y, z, size, rot, flip = 1) {
+    const s = add(art, arcGeo, mat.streak, [x, y, z], [size * flip, size, size]);
+    s.rotation.z = rot;
+    s.castShadow = false;
+    floaters.push([s, x, y, Math.random() * 6, 0.25]);
+  }
+  function celestialBody(isDay, pos, r) {
+    const body = add(art, sphereGeo, isDay ? mat.sun : mat.moon, pos, r);
+    breather = [body, r];
+    if (!isDay) {
+      for (const [cx, cy, cr] of [[-0.35, 0.3, 0.2], [0.25, -0.2, 0.14], [0.1, 0.45, 0.09], [-0.15, -0.45, 0.12]]) {
+        const v = new THREE.Vector3(cx, cy, Math.sqrt(Math.max(0, 1 - cx * cx - cy * cy)) * 0.93);
+        const c = add(body, sphereGeo, mat.crater, v.toArray(), [cr, cr, cr * 0.35]);
+        c.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), v.clone().normalize());
+      }
+      for (let i = 0; i < 9; i++) {
+        const st = add(art, sphereGeo, mat.star, [-4.2 + Math.random() * 8.4, 3 + Math.random() * 6.5, -2 - Math.random() * 2], 0.06 + Math.random() * 0.06);
+        st.castShadow = false;
+        twinklers.push([st, Math.random() * 6]);
+      }
+    } else {
+      glow.intensity = 6;
+    }
+    return body;
   }
 
   function buildArt(kind, isDay) {
     clearGroup(art);
     floaters.length = 0;
     fallers.length = 0;
+    twinklers.length = 0;
+    breather = null;
+    glow.intensity = 0;
     const cm = kind === 'snow' || kind === 'fog' ? mat.cloudLight : mat.cloud;
-    const celestial = isDay ? mat.sun : mat.moon;
-    const cloud = (x, y, z, r) => floaters.push([add(art, sphereGeo, cm, [x, y, z], r), y, Math.random() * 6]);
-    const streak = (x, y, z, len, rot) => {
-      const s = add(art, sphereGeo, mat.streak, [x, y, z], [len, 0.06, 0.16]);
-      s.rotation.z = rot;
-    };
     if (kind === 'clear') {
-      add(art, sphereGeo, celestial, [0, 5.4, -0.6], 2.9);
-      streak(-1.8, 8.2, 1.2, 1.3, -0.08); streak(2.4, 7.4, 1.4, 1.1, 0.12);
+      celestialBody(isDay, [0, 5.3, -0.4], 2.8);
+      swoosh(-2.6, 7.6, 1.0, 1.0, 0.5); swoosh(2.8, 6.4, 1.2, 0.9, -0.2, -1);
     } else if (kind === 'partly') {
-      add(art, sphereGeo, celestial, [0.2, 5.6, -1.2], 2.7);
-      cloud(-3.0, 5.0, 0.6, 0.95); cloud(-3.1, 3.7, 1.0, 0.8); cloud(-2.2, 3.5, 1.6, 0.7);
-      cloud(-1.2, 4.6, 1.8, 0.62); cloud(1.4, 4.7, 1.7, 0.62); cloud(3.1, 4.5, 0.8, 0.85); cloud(4.4, 3.8, 0.4, 0.35);
-      streak(-1.5, 8.0, 0.6, 1.2, -0.06); streak(2.3, 7.9, 0.4, 1.2, 0.1); streak(0.4, 5.2, 2.4, 1.3, 0.02); streak(2.2, 4.3, 2.2, 1.2, -0.22);
+      celestialBody(isDay, [0.6, 5.7, -1.2], 2.6);
+      puff(-1.3, 4.1, 1.4, 1.2, cm);
+      puff(2.8, 3.9, 0.9, 0.75, cm);
+      swoosh(-2.8, 7.3, 0.4, 0.9, 0.55); swoosh(3.2, 7.2, 0.2, 0.8, -0.3, -1); swoosh(1.2, 2.9, 2.4, 0.7, -0.1, -1);
     } else {
-      if (kind === 'cloudy') add(art, sphereGeo, celestial, [1.6, 6.6, -2.2], 1.6);
-      cloud(-2.4, 5.3, 0.2, 1.35); cloud(0.2, 6.0, -0.4, 1.6); cloud(2.6, 5.2, 0.1, 1.3);
-      cloud(-1.1, 4.1, 1.3, 1.1); cloud(1.4, 4.0, 1.2, 1.05); cloud(-3.8, 4.0, 0.6, 0.6); cloud(4.0, 4.1, 0.5, 0.55);
-      streak(-2.0, 7.8, 0.6, 1.1, -0.1); streak(2.6, 7.6, 0.4, 1.2, 0.12);
+      if (kind === 'cloudy') celestialBody(isDay, [2.2, 6.9, -2.4], 1.5);
+      puff(-1.6, 5.6, 0.0, 1.25, cm);
+      puff(1.8, 5.0, 0.6, 1.1, cm);
+      puff(-0.2, 3.9, 1.5, 0.9, cm);
+      swoosh(-3.2, 7.6, 0.4, 0.8, 0.5); swoosh(3.4, 7.1, 0.3, 0.75, -0.3, -1);
       if (kind === 'rain' || kind === 'storm') {
-        const g = new THREE.CapsuleGeometry(0.07, 0.38, 4, 8);
-        for (let i = 0; i < 22; i++) {
-          const x = -3.4 + Math.random() * 6.8, z = -0.4 + Math.random() * 2.4;
-          fallers.push([add(art, g, mat.drop, [x, 3, z]), x, z, 5 + Math.random() * 2, Math.random()]);
+        for (let i = 0; i < 18; i++) {
+          const x = -3.2 + Math.random() * 6.4, z = -0.2 + Math.random() * 2.4;
+          fallers.push([add(art, dropGeo, mat.drop, [x, 3, z], 1.1), x, z, 4 + Math.random() * 1.5, Math.random()]);
         }
       }
       if (kind === 'snow') {
-        const g = new THREE.SphereGeometry(0.11, 12, 10);
-        for (let i = 0; i < 26; i++) {
+        for (let i = 0; i < 24; i++) {
           const x = -3.4 + Math.random() * 6.8, z = -0.4 + Math.random() * 2.4;
-          fallers.push([add(art, g, mat.snow, [x, 3, z]), x, z, 1.1 + Math.random() * 0.6, Math.random()]);
+          fallers.push([add(art, sphereGeo, mat.snow, [x, 3, z], 0.12 + Math.random() * 0.06), x, z, 1.0 + Math.random() * 0.5, Math.random()]);
         }
       }
       if (kind === 'storm') {
-        const s = new THREE.Shape();
-        s.moveTo(0.2, 0); s.lineTo(-0.7, -1.4); s.lineTo(-0.05, -1.4); s.lineTo(-0.5, -2.8); s.lineTo(0.9, -0.9); s.lineTo(0.2, -0.9); s.lineTo(0.7, 0);
-        const g = new THREE.ExtrudeGeometry(s, { depth: 0.3, bevelEnabled: true, bevelSize: 0.04, bevelThickness: 0.04, bevelSegments: 2 });
-        add(art, g, mat.bolt, [0.1, 3.8, 1.6]);
+        const sh = new THREE.Shape();
+        sh.moveTo(0.2, 0); sh.lineTo(-0.7, -1.4); sh.lineTo(-0.05, -1.4); sh.lineTo(-0.5, -2.8); sh.lineTo(0.9, -0.9); sh.lineTo(0.2, -0.9); sh.lineTo(0.7, 0);
+        const g = new THREE.ExtrudeGeometry(sh, { depth: 0.3, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.06, bevelSegments: 3 });
+        const bolt = add(art, g, mat.bolt, [0.1, 3.9, 1.9]);
+        floaters.push([bolt, 0.1, 3.9, 0, 0.05]);
       }
       if (kind === 'fog') {
         for (let i = 0; i < 3; i++) {
-          const g = new THREE.CapsuleGeometry(0.16, 6 - i * 1.4, 4, 12);
-          const m = add(art, g, mat.cloudLight, [0, 3.0 - i * 0.5, 1.6]);
+          const g = new THREE.CapsuleGeometry(0.2, 5.4 - i * 1.3, 6, 16);
+          const m = add(art, g, mat.cloudLight, [0, 3.0 - i * 0.55, 1.8]);
           m.rotation.z = Math.PI / 2;
+          floaters.push([m, 0, 3.0 - i * 0.55, i * 2, 0.35]);
         }
       }
     }
@@ -192,15 +243,15 @@ export function createWeather3D(container, { onTap } = {}) {
     clearGroup(digits);
     const shapes = textShapes(font, t, 1);
     const geo = new THREE.ExtrudeGeometry(shapes, {
-      depth: 0.16, curveSegments: 8, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.028, bevelSegments: 3,
+      depth: 0.16, curveSegments: 10, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.034, bevelSegments: 4,
     });
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
     const h = bb.max.y - bb.min.y;
-    const s = 5.6 / h; // digits always stand 5.6 units tall
+    const s = 5.9 / h; // digits always stand 5.9 units tall
     geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
     const m = new THREE.Mesh(geo, mat.digit);
-    m.scale.set(s * 1.05, s, 1.5 / 0.26); // ~1.5 units thick
+    m.scale.set(s * 0.94, s, 1.5 / 0.28); // tall and narrow, ~1.5 units thick
     m.position.y = -3.35;
     m.castShadow = true;
     m.receiveShadow = true;
@@ -208,11 +259,13 @@ export function createWeather3D(container, { onTap } = {}) {
   }
 
   function setNight(night) {
-    hemi.intensity = night ? 0.7 : 1.5;
-    hemi.groundColor.set(night ? 0x111111 : 0x9a9a9a);
-    key.intensity = night ? 1.4 : 2.6;
-    ground.material.opacity = night ? 0.35 : 0.16;
-    mat.digit.color.set(night ? 0x2c2c2c : 0x1b1b1b);
+    hemi.intensity = night ? 0.9 : 1.7;
+    hemi.groundColor.set(night ? 0x202020 : 0xe4e4e4);
+    key.intensity = night ? 1.3 : 1.9;
+    fill.intensity = night ? 0.45 : 0.75;
+    ground.material.opacity = night ? 0.3 : 0.09;
+    mat.digit.color.set(night ? 0x3a3a3a : 0x2c2c2c);
+    mat.cloud.color.set(night ? 0x3a3a3a : 0x2a2a2a);
   }
 
   // ----- size -----
@@ -282,7 +335,12 @@ export function createWeather3D(container, { onTap } = {}) {
     }
     spin.rotation.y = rotY + Math.sin(t * 0.6) * 0.06;
     spin.rotation.x = rotX;
-    for (const [m, y, ph] of floaters) m.position.y = y + Math.sin(t * 0.9 + ph) * 0.08;
+    for (const [o, x, y, ph, drift] of floaters) {
+      o.position.y = y + Math.sin(t * 0.9 + ph) * 0.09;
+      o.position.x = x + Math.sin(t * 0.35 + ph) * drift;
+    }
+    for (const [m, ph] of twinklers) m.scale.setScalar(0.07 * (0.6 + 0.4 * Math.sin(t * 2.4 + ph)));
+    if (breather) breather[0].scale.setScalar(breather[1] * (1 + Math.sin(t * 1.1) * 0.012));
     for (const f of fallers) {
       const [m, , , speed] = f;
       f[4] = (f[4] + dt * speed / 4) % 1;
@@ -307,7 +365,7 @@ export function createWeather3D(container, { onTap } = {}) {
       ro.disconnect();
       clearGroup(art); clearGroup(digits);
       Object.values(mat).forEach((m) => m.dispose());
-      sphereGeo.dispose(); grain.dispose();
+      sphereGeo.dispose(); arcGeo.dispose(); dropGeo.dispose(); grain.dispose();
       renderer.dispose();
       canvas.remove();
     },

@@ -1,6 +1,6 @@
 // Offline support: try the network first so updates show up right away,
 // and fall back to the cache only when offline.
-const VERSION = 'quint-v5';
+const VERSION = 'quint-v6';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/main.js', 'js/ui.js', 'js/calculator.js', 'js/weather.js', 'js/timer.js',
