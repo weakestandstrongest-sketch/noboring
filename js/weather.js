@@ -240,7 +240,7 @@ export default function weather({ setTone }) {
   }
 
   // hero pieces, rebuilt by build() and updated by show()
-  let hero = null, artBox, tempNum, condEl, scrub, cursor, bubble, track, shownKey = '';
+  let hero = null, stage3d = null, artBox, tempNum, condEl, scrub, cursor, bubble, track, shownKey = '';
 
   // the 3D scene loads on demand; if it cannot load, the flat version is used
   const wx3d = import('./wx3d.js').catch(() => null);
@@ -259,19 +259,20 @@ export default function weather({ setTone }) {
     // hour 0 is "now": use the current conditions
     if (hours[0]) Object.assign(hours[0], { t: c.temperature_2m, code: c.weather_code, day: !!c.is_day, cc: c.cloud_cover ?? hours[0].cc });
 
-    // 3D scene you can spin; flat SVG + CSS numerals if WebGL is unavailable
-    hero?.destroy();
-    hero = null;
-    const stage3d = h('div', { class: 'wx-3d' });
-    try {
-      if (!mod) throw new Error('3D unavailable');
-      hero = mod.createWeather3D(stage3d, { onTap: toggleDetail });
-    } catch {
-      artBox = h('div', { class: 'wx-art' });
-      tempNum = emboss('0', { variant: 'ink' });
-      tempNum.addEventListener('click', () => { pop(tempNum.firstElementChild); toggleDetail(); });
-      stage3d.classList.add('flat');
-      stage3d.append(artBox, h('div', { class: 'wx-temp' }, tempNum));
+    // 3D scene you can spin; flat SVG + CSS numerals if WebGL is unavailable.
+    // Made once per visit and kept: fresh data only updates it, so the canvas never blanks.
+    if (!stage3d) {
+      stage3d = h('div', { class: 'wx-3d' });
+      try {
+        if (!mod) throw new Error('3D unavailable');
+        hero = mod.createWeather3D(stage3d, { onTap: toggleDetail });
+      } catch {
+        artBox = h('div', { class: 'wx-art' });
+        tempNum = emboss('0', { variant: 'ink' });
+        tempNum.addEventListener('click', () => { pop(tempNum.firstElementChild); toggleDetail(); });
+        stage3d.classList.add('flat');
+        stage3d.append(artBox, h('div', { class: 'wx-temp' }, tempNum));
+      }
     }
     condEl = h('div', { class: 'wx-cond' });
 
@@ -307,9 +308,13 @@ export default function weather({ setTone }) {
 
     dm = detailModel(d);
     panel = createPanel({ getModel: () => dm, state: dstate, onChange: (st, dir) => syncDetail(dir) });
-    main.replaceChildren(stage3d, condEl, scrub, panel.el);
+    // swap everything except the 3D stage, which stays in place
+    if (stage3d.parentNode !== main) main.replaceChildren(stage3d);
+    while (stage3d.nextSibling) stage3d.nextSibling.remove();
+    main.append(condEl, scrub, panel.el);
     shownKey = '';
     show(null);
+    hero?.renderNow();
     if (dstate.on) { panel.render(); hero?.enterDetail(detailPages(), dstate.page); syncDetail(0); }
   }
 

@@ -4,10 +4,12 @@
 import * as THREE from '../vendor/three.module.min.js';
 
 let fontPromise;
+let fontData = null;
 function loadFont() {
-  fontPromise ||= fetch(new URL('../vendor/digits.typeface.json', import.meta.url)).then((r) => r.json());
+  fontPromise ||= fetch(new URL('../vendor/digits.typeface.json', import.meta.url)).then((r) => r.json()).then((f) => (fontData = f));
   return fontPromise;
 }
+loadFont(); // start early so the numerals are ready by the time the scene first draws
 
 // Typeface glyph outlines → THREE.Shapes (same format FontLoader reads).
 function textShapes(font, text, size) {
@@ -259,9 +261,13 @@ export function createWeather3D(container, { onTap } = {}) {
 
   let font = null;
   let text = '';
+  const digitMeshSync = (t, height) => { font ||= fontData; return buildDigits(t, height); };
   // tall chamfered numerals, `height` units tall, standing on y = 0
   async function digitMesh(t, height) {
-    font ||= await loadFont();
+    font ||= fontData || await loadFont();
+    return buildDigits(t, height);
+  }
+  function buildDigits(t, height) {
     const shapes = textShapes(font, t, 1);
     // one flat bevel segment = crisp 45° chamfers on every edge
     const geo = new THREE.ExtrudeGeometry(shapes, {
@@ -278,7 +284,7 @@ export function createWeather3D(container, { onTap } = {}) {
   }
   async function setText(t) {
     text = t;
-    const m = await digitMesh(t, DIGIT_TOP + 4.2);
+    const m = fontData ? digitMeshSync(t, DIGIT_TOP + 4.2) : await digitMesh(t, DIGIT_TOP + 4.2);
     if (text !== t) { m.geometry.dispose(); return; }
     clearGroup(digits);
     m.position.y = -4.2;
@@ -666,6 +672,8 @@ export function createWeather3D(container, { onTap } = {}) {
       mat.moonPhase.uniforms.sunDir.value.set(Math.sin(a), 0, -Math.cos(a)).normalize();
     },
     setText,
+    // draw right away instead of waiting for the next animation frame
+    renderNow() { resize(); renderer.render(scene, camera); },
     enterDetail,
     updateDetail,
     showPage,
@@ -680,6 +688,9 @@ export function createWeather3D(container, { onTap } = {}) {
       shared.forEach((g) => g.dispose());
       grain.dispose();
       renderer.dispose();
+      // hand the GPU context back right away: Safari only allows a few at once, and
+      // leaked ones make later scenes drop out (a white blink)
+      renderer.forceContextLoss();
       canvas.remove();
     },
   };
