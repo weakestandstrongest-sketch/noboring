@@ -203,7 +203,7 @@ export default function weather({ setTone }) {
 
   // detail pages, opened by tapping the numerals
   const dstate = { on: false, page: 0, range: 'day', index: 0 };
-  let dm = null, panel = null, lastDetailKey = '';
+  let dm = null, panel = null;
 
   function toggleDetail() {
     dstate.on = !dstate.on;
@@ -213,25 +213,30 @@ export default function weather({ setTone }) {
       dstate.index = sel ?? 0;
       dstate.range = 'day';
       panel.render();
-      lastDetailKey = '';
+      hero?.enterDetail(detailPages(), dstate.page);
       syncDetail(0);
     } else {
-      hero?.setDetail(null);
+      hero?.exitDetail();
       shownKey = '';
       show(sel);
     }
   }
 
+  // what each page's model shows at the selected time, and a key that changes when it must be rebuilt
+  function detailPages() {
+    return PAGES.map(({ id }) => {
+      const info = sceneInfo(id, dm, dstate.range, dstate.index);
+      const bucket = { temp: info.temp, precip: `${Math.round(info.rain * 2)}${info.snow}`, cloud: Math.round(info.cloud / 20) }[id] ?? '';
+      return { page: id, info, key: `${id}:${bucket}` };
+    });
+  }
+
   function syncDetail(dir = 0) {
     if (!hero || !dstate.on) return;
-    const pg = PAGES[dstate.page].id;
-    const info = sceneInfo(pg, dm, dstate.range, dstate.index);
-    const bucket = { temp: info.temp, precip: `${Math.round(info.rain * 2)}${info.snow}`, cloud: Math.round(info.cloud / 20) }[pg] ?? '';
-    const key = `${pg}:${bucket}`;
-    if (dir || key !== lastDetailKey) hero.setDetail(pg, info, dir);
-    else if (pg === 'air') hero.tuneAir(info);
-    lastDetailKey = key;
-    hero.setMoonPhase(info.phase);
+    if (dir) hero.showPage(dstate.page);
+    const pages = detailPages();
+    pages.forEach((p, i) => hero.updateDetail(i, p.info, p.key));
+    hero.setMoonPhase(pages[PAGES.findIndex((p) => p.id === 'moon')].info.phase);
   }
 
   // hero pieces, rebuilt by build() and updated by show()
@@ -305,7 +310,7 @@ export default function weather({ setTone }) {
     main.replaceChildren(stage3d, condEl, scrub, panel.el);
     shownKey = '';
     show(null);
-    if (dstate.on) { panel.render(); lastDetailKey = ''; syncDetail(0); }
+    if (dstate.on) { panel.render(); hero?.enterDetail(detailPages(), dstate.page); syncDetail(0); }
   }
 
   function show(i) {

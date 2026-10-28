@@ -76,6 +76,8 @@ export function createWeather3D(container, { onTap } = {}) {
   container.append(canvas);
 
   const scene = new THREE.Scene();
+  // fog fades the neighbouring pages in the detail carousel; parked out of reach otherwise
+  scene.fog = new THREE.Fog(0xffffff, 900, 1000);
   const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 200);
   const grain = grainTexture();
 
@@ -121,7 +123,7 @@ export function createWeather3D(container, { onTap } = {}) {
       vertexShader: `
         varying vec3 vN; varying vec2 vUv;
         void main() {
-          vN = normalize(normalMatrix * normal);
+          vN = normalize(normal); // object space: the lit side turns with the moon
           vUv = uv;
           gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }`,
@@ -135,7 +137,6 @@ export function createWeather3D(container, { onTap } = {}) {
           vec3 day = vec3(0.97, 0.97, 0.95) * (0.62 + 0.38 * clamp(d, 0.0, 1.0));
           vec3 night = vec3(0.035, 0.035, 0.04);              // faint earthshine
           vec3 col = mix(night, day, lit) * (0.9 + 0.16 * g);
-          col *= 0.82 + 0.18 * normalize(vN).z;               // gentle limb darkening
           gl_FragColor = vec4(col, 1.0);
           #include <colorspace_fragment>
         }`,
@@ -284,131 +285,242 @@ export function createWeather3D(container, { onTap } = {}) {
     digits.add(m);
   }
 
-  // ----- detail pages: one model per page, slid in sideways -----
+  // ----- detail pages: a carousel with one model per page -----
+  // Every page has its own model and its own rotation; the current one sits in
+  // front and its neighbours wait, faded, to the left and right.
   let mode = 'hero';
-  let detailGroup = null, leaving = null, slide = 1, slideDir = 1;
-  const spinners = [];   // [object, speed]
-  const detailRain = []; // [mesh, speed, phase]
-  let vane = null;
-  const rockMat = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.85, flatShading: true, bumpMap: grain, bumpScale: 0.4 });
-  const metalMat = new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.35, metalness: 0.4 });
-  const waterMat = new THREE.MeshStandardMaterial({ color: 0x8fc4ff, roughness: 0.15, transparent: true, opacity: 0.85 });
+  const carousel = new THREE.Group();
+  scene.add(carousel);
+  let models = [];          // [{ page, wrap, inner, anim, key, rotY, rotX, velY, velX, idleAt }]
+  let current = 0, pos = 0; // target page and the animated carousel position
+  const rockMat = new THREE.MeshStandardMaterial({ color: 0xffffff, vertexColors: true, roughness: 0.92, flatShading: true, bumpMap: grain, bumpScale: 0.6 });
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0x2b2b2b, roughness: 0.32, metalness: 0.55 });
+  const darkMatte = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.55, bumpMap: grain, bumpScale: 0.25, side: THREE.DoubleSide });
+  const waterMat = new THREE.MeshStandardMaterial({ color: 0x9fd0ff, roughness: 0.08, metalness: 0.1, transparent: true, opacity: 0.8 });
+  const rippleMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.6 });
 
-  // a floating chunk of rock: flat top, jagged underside
-  function rock(r) {
-    const geo = new THREE.CylinderGeometry(3.2, 0.9, 1.9, 11, 3, false);
-    const pos = geo.attributes.position;
-    for (let i = 0; i < pos.count; i++) {
-      const y = pos.getY(i);
-      if (y < 0.9) {
-        const k = (0.9 - y) / 1.9;
-        pos.setX(i, pos.getX(i) * (0.85 + r() * 0.3));
-        pos.setZ(i, pos.getZ(i) * (0.85 + r() * 0.3));
-        pos.setY(i, y - r() * 0.9 * k);
+  // smooth 3D value noise, enough to make rock look like rock
+  const hash3 = (x, y, z) => {
+    const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
+    return s - Math.floor(s);
+  };
+  function noise3(x, y, z) {
+    const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
+    const f = (t) => t * t * (3 - 2 * t);
+    const u = f(x - xi), v = f(y - yi), w = f(z - zi);
+    const L = (a, b, t) => a + (b - a) * t;
+    const c = (i, j, k) => hash3(xi + i, yi + j, zi + k);
+    return L(L(L(c(0, 0, 0), c(1, 0, 0), u), L(c(0, 1, 0), c(1, 1, 0), u), v),
+      L(L(c(0, 0, 1), c(1, 0, 1), u), L(c(0, 1, 1), c(1, 1, 1), u), v), w);
+  }
+  const fbm = (x, y, z) => noise3(x, y, z) * 0.6 + noise3(x * 2.3, y * 2.3, z * 2.3) * 0.28 + noise3(x * 5.1, y * 5.1, z * 5.1) * 0.12;
+
+  // a floating island: a flat, slightly uneven top and a jagged, faceted underside
+  // with stepped cliffs; faces are shaded individually so the rock reads as carved
+  function rockGeometry(radius, seed, detail = 5) {
+    const geo = new THREE.IcosahedronGeometry(1, detail); // non-indexed, so facets stay sharp
+    const p = geo.attributes.position;
+    const v = new THREE.Vector3();
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i).normalize();
+      const ang = Math.atan2(v.z, v.x);
+      const n = fbm(v.x * 2.2 + seed, v.y * 2.2, v.z * 2.2);
+      const len = Math.max(0.0001, Math.hypot(v.x, v.z));
+      let x, y, z;
+      if (v.y > 0.1) {
+        // top: nearly flat, gently domed, with a ragged outline
+        const r = radius * (0.9 + n * 0.18) * Math.min(1, len / 0.995);
+        x = (v.x / len) * r;
+        z = (v.z / len) * r;
+        y = 0.3 + (1 - len) * 0.12 + (n - 0.5) * 0.1;
+      } else {
+        // underside: tapers to a crooked point; blocky crags and stepped ledges
+        const depth = Math.min(1, (0.1 - v.y) / 1.1);
+        const crag = hash3(Math.floor((ang + Math.PI) * 2.6), Math.floor(depth * 6), seed) - 0.5;
+        const ledge = Math.floor(depth * 5) / 5;
+        const shrink = Math.pow(1 - (depth * 0.6 + ledge * 0.4), 1.25);
+        const r = radius * shrink * (0.82 + n * 0.45 + crag * 0.35) * Math.min(1, len * 1.3);
+        x = (v.x / len) * r;
+        z = (v.z / len) * r;
+        y = 0.3 - depth * radius * (0.85 + n * 0.55) - Math.max(0, crag) * 0.5 * depth;
       }
+      p.setXYZ(i, x, y, z);
     }
     geo.computeVertexNormals();
-    const m = new THREE.Mesh(geo, rockMat);
-    m.castShadow = m.receiveShadow = true;
-    return m;
+    // per-face tone: lighter weathered top, darker varied cliffs
+    const col = new Float32Array(p.count * 3);
+    for (let f = 0; f < p.count; f += 3) {
+      const cy = (p.getY(f) + p.getY(f + 1) + p.getY(f + 2)) / 3;
+      const cx = (p.getX(f) + p.getX(f + 1) + p.getX(f + 2)) / 3;
+      const cz = (p.getZ(f) + p.getZ(f + 1) + p.getZ(f + 2)) / 3;
+      const k = hash3(Math.round(cx * 7), Math.round(cy * 7), Math.round(cz * 7));
+      const g = cy > 0.2 ? 0.05 + k * 0.012 : 0.018 + k * 0.022; // linear values: near-black stone
+      for (let j = 0; j < 3; j++) col.set([g, g, g * 0.98], (f + j) * 3);
+    }
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return geo;
   }
 
-  function anemometer(g) {
-    add(g, new THREE.CylinderGeometry(0.06, 0.06, 6.2, 12), metalMat, [0, -0.6, 0]);
+  function islandModel(info) {
+    const g = new THREE.Group();
+    const r = rng(41);
+    // tipped toward the viewer so the top surface (and any rain pooling on it) shows
+    g.rotation.x = 0.42;
+    g.position.y = 0.9;
+    const body = new THREE.Mesh(rockGeometry(2.9, 3.7), rockMat);
+    body.castShadow = body.receiveShadow = true;
+    g.add(body);
+    // a few loose pebbles drifting under it
+    const pebbles = [];
+    for (let i = 0; i < 7; i++) {
+      const peb = new THREE.Mesh(rockGeometry(0.18 + r() * 0.22, i * 9.1, 2), rockMat);
+      const a = (i / 7) * Math.PI * 2 + r() * 0.5, d = 1.9 + r() * 1.3;
+      peb.position.set(Math.cos(a) * d, -0.6 - r() * 1.8, Math.sin(a) * d);
+      peb.rotation.set(r() * 3, r() * 3, r() * 3);
+      peb.castShadow = true;
+      g.add(peb);
+      pebbles.push([peb, peb.position.y, r() * 6]);
+    }
+    const anim = { pebbles, rain: [], ripples: [] };
+    if (info.rain > 0) {
+      const amount = Math.min(1, 0.35 + info.rain / 5);
+      const pool = new THREE.Mesh(new THREE.CircleGeometry(2.3 * amount, 48), waterMat);
+      pool.rotation.x = -Math.PI / 2;
+      pool.position.y = 0.46;
+      g.add(pool);
+      for (let i = 0; i < 3; i++) {
+        const ring = new THREE.Mesh(new THREE.RingGeometry(0.2, 0.24, 40), rippleMat.clone());
+        ring.rotation.x = -Math.PI / 2;
+        ring.position.set((r() - 0.5) * 2 * amount, 0.48, (r() - 0.5) * 2 * amount);
+        g.add(ring);
+        anim.ripples.push([ring, i / 3]);
+      }
+      const n = Math.min(28, 8 + Math.round(info.rain * 5));
+      for (let i = 0; i < n; i++) {
+        const m = add(g, info.snow ? sphereGeo : dropGeo, info.snow ? mat.snow : mat.drop, [-2.3 + r() * 4.6, 0, -2 + r() * 4], info.snow ? 0.12 : 1.15);
+        anim.rain.push([m, info.snow ? 1.2 : 4.8, r()]);
+      }
+    }
+    return [g, anim];
+  }
+
+  function anemometerModel(info) {
+    const g = new THREE.Group();
+    // mast and a small weighted base
+    add(g, new THREE.CylinderGeometry(0.07, 0.09, 5.6, 24), metalMat, [0, -0.4, 0]);
+    add(g, new THREE.CylinderGeometry(0.5, 0.6, 0.18, 40), metalMat, [0, -3.2, 0]);
+    // spinning cup head
     const head = new THREE.Group();
     head.position.y = 2.5;
     g.add(head);
-    add(head, sphereGeo, metalMat, [0, 0, 0], 0.18);
-    const cupGeo = new THREE.SphereGeometry(0.42, 24, 12, 0, Math.PI);
+    add(head, new THREE.CylinderGeometry(0.14, 0.18, 0.4, 24), metalMat, [0, 0, 0]);
+    add(head, new THREE.ConeGeometry(0.16, 0.25, 24), metalMat, [0, 0.32, 0]);
+    const cupGeo = new THREE.SphereGeometry(0.42, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2);
     for (let i = 0; i < 3; i++) {
       const arm = new THREE.Group();
       arm.rotation.y = (i / 3) * Math.PI * 2;
       head.add(arm);
-      add(arm, new THREE.CylinderGeometry(0.035, 0.035, 1.5, 8), metalMat, [0.75, 0, 0]).rotation.z = Math.PI / 2;
-      const cup = add(arm, cupGeo, mat.cloud, [1.5, 0, 0]);
-      cup.rotation.y = Math.PI / 2;
+      const rod = add(arm, new THREE.CylinderGeometry(0.035, 0.035, 1.55, 12), metalMat, [0.8, 0, 0]);
+      rod.rotation.z = Math.PI / 2;
+      const cup = add(arm, cupGeo, darkMatte, [1.62, 0, 0]);
+      cup.rotation.x = Math.PI / 2; // open side faces the direction of spin
     }
-    spinners.push([head, 0]);
-    // wind vane: an arrow that turns to face the wind
-    vane = new THREE.Group();
-    vane.position.y = 0.6;
+    // wind vane: tail fin and arrow on a short arm, turned toward the wind
+    const vane = new THREE.Group();
+    vane.position.y = 0.9;
     g.add(vane);
-    add(vane, new THREE.BoxGeometry(2.6, 0.05, 0.05), metalMat, [0, 0, 0]);
-    add(vane, new THREE.BoxGeometry(0.05, 0.9, 0.9), mat.cloud, [-1.2, 0, 0]).rotation.x = Math.PI / 4;
-    add(vane, new THREE.ConeGeometry(0.14, 0.4, 12), metalMat, [1.4, 0, 0]).rotation.z = -Math.PI / 2;
-    // a thin ring sweeping round the mast
-    const ring = add(g, new THREE.TorusGeometry(2.6, 0.03, 8, 96), metalMat, [0, 0.6, 0]);
+    const rod = add(vane, new THREE.CylinderGeometry(0.03, 0.03, 2.8, 12), metalMat, [0, 0, 0]);
+    rod.rotation.z = Math.PI / 2;
+    const fin = new THREE.Shape();
+    fin.moveTo(0, 0); fin.lineTo(-0.9, 0.55); fin.lineTo(-1.0, -0.45); fin.lineTo(0, -0.1);
+    const finMesh = add(vane, new THREE.ExtrudeGeometry(fin, { depth: 0.04, bevelEnabled: true, bevelSize: 0.015, bevelThickness: 0.015, bevelSegments: 2 }), darkMatte, [-1.0, 0, -0.02]);
+    finMesh.castShadow = true;
+    const tip = add(vane, new THREE.ConeGeometry(0.16, 0.5, 4), metalMat, [1.6, 0, 0]);
+    tip.rotation.z = -Math.PI / 2;
+    // a thin orbit ring
+    const ring = add(g, new THREE.TorusGeometry(2.7, 0.025, 8, 160), metalMat, [0, 0.9, 0]);
     ring.rotation.x = Math.PI / 2;
     ring.castShadow = false;
+    const anim = { head, vane, speed: 0 };
+    tuneModel(anim, info);
+    return [g, anim];
+  }
+  function tuneModel(anim, info) {
+    if (anim.vane) anim.vane.rotation.y = -((info.dir ?? 0) * Math.PI) / 180 + Math.PI / 2;
+    if (anim.head) anim.speed = 0.6 + Math.min(8, info.wind ?? 0) * 0.85;
   }
 
-  function buildDetail(page, info) {
+  function cloudModel(info) {
     const g = new THREE.Group();
-    const r = rng(17 + page.length * 13);
-    spinners.length = 0;
-    detailRain.length = 0;
-    vane = null;
+    const r = rng(23);
+    const c = Math.max(0.12, Math.min(1, info.cloud / 100));
+    cloudMass(r, -1.3, 0.5, 0.4, 3.6 * (0.6 + c * 0.4), 7, 0.85 + c * 0.55, mat.cloud, g);
+    if (c > 0.3) cloudMass(r, 2.1, 1.2, -0.4, 2.6, 5, 0.65 + c * 0.45, mat.cloud, g);
+    if (c > 0.65) cloudMass(r, 0.3, -0.7, 1.2, 3.4, 6, 0.85, mat.cloud, g);
+    return [g, {}];
+  }
+
+  function buildModel(page, info) {
+    if (page === 'precip') return islandModel(info);
+    if (page === 'air') return anemometerModel(info);
+    if (page === 'cloud') return cloudModel(info);
+    const g = new THREE.Group();
     if (page === 'sun') add(g, sphereGeo, mat.sun, [0, 0.2, 0], 2.7);
-    else if (page === 'moon') add(g, sphereGeo, mat.moonPhase, [0, 0.2, 0], 2.7);
-    else if (page === 'cloud') {
-      const c = Math.max(0.15, Math.min(1, info.cloud / 100));
-      cloudMass(r, -1.4, 0.4, 0.6, 3.6 * (0.6 + c * 0.4), 5, 0.9 + c * 0.5, mat.cloud, g);
-      if (c > 0.35) cloudMass(r, 2.0, 1.1, -0.2, 2.6, 4, 0.7 + c * 0.4, mat.cloud, g);
-      if (c > 0.7) cloudMass(r, 0.2, -0.6, 1.4, 3.4, 5, 0.9, mat.cloud, g);
-    } else if (page === 'air') {
-      anemometer(g);
-    } else if (page === 'precip') {
-      const isl = rock(r);
-      isl.position.y = -1.2;
-      g.add(isl);
-      if (info.rain > 0) {
-        const pool = add(g, new THREE.CylinderGeometry(2.4, 2.4, 0.08, 40), waterMat, [0, -0.2, 0]);
-        pool.scale.setScalar(Math.min(1, 0.4 + info.rain / 6));
-        pool.castShadow = false;
-        const n = Math.min(26, 6 + Math.round(info.rain * 5));
-        for (let i = 0; i < n; i++) {
-          const m = add(g, info.snow ? sphereGeo : dropGeo, info.snow ? mat.snow : mat.drop, [-2.4 + r() * 4.8, 0, -1.4 + r() * 2.8], info.snow ? 0.12 : 1.2);
-          detailRain.push([m, info.snow ? 1.2 : 4.5, r()]);
-        }
-      }
-    } else if (page === 'temp') {
+    if (page === 'moon') add(g, sphereGeo, mat.moonPhase, [0, 0.2, 0], 2.7);
+    if (page === 'temp') {
       digitMesh(String(info.temp), 5.6).then((m) => {
         if (!g.parent) { m.geometry.dispose(); return; }
         m.position.y = -2.6;
         g.add(m);
       });
     }
-    return g;
+    return [g, {}];
   }
 
-  function setDetail(page, info, dir = 0) {
-    if (!page) {
-      mode = 'hero';
-      for (const x of [detailGroup, leaving]) if (x) { spin.remove(x); clearGroup(x); }
-      detailGroup = leaving = null;
-      art.visible = digits.visible = true;
-      resize();
-      return;
-    }
-    const first = mode !== 'detail';
+  // start the carousel on `index`; pages = [{ page, info, key }]
+  function enterDetail(pages, index) {
+    exitDetail();
     mode = 'detail';
     art.visible = digits.visible = false;
-    if (leaving) { spin.remove(leaving); clearGroup(leaving); }
-    leaving = first ? null : detailGroup;
-    detailGroup = buildDetail(page, info);
-    spin.add(detailGroup);
-    slideDir = dir || 1;
-    slide = dir && !first ? 0 : 1;
-    tuneAir(info);
+    wall.position.z = -9; // behind the receding neighbours, so it never cuts through them
+    models = pages.map(({ page, info, key }) => {
+      const wrap = new THREE.Group();
+      const [inner, anim] = buildModel(page, info);
+      wrap.add(inner);
+      carousel.add(wrap);
+      return { page, wrap, inner, anim, key, rotY: 0, rotX: 0, velY: 0, velX: 0, idleAt: 0 };
+    });
+    current = pos = index;
+    scene.fog.color.set(night ? 0x1f1f1f : 0xffffff);
     resize();
   }
-  // wind changes without rebuilding: turn the vane, speed up the cups
-  function tuneAir(info) {
-    if (vane) vane.rotation.y = -((info.dir ?? 0) * Math.PI) / 180 + Math.PI / 2;
-    if (spinners[0]) spinners[0][1] = 0.6 + Math.min(6, info.wind ?? 0) * 0.9;
+  // rebuild one page's model when its data changes (e.g. the scrubber moved)
+  function updateDetail(i, info, key) {
+    const m = models[i];
+    if (!m) return;
+    if (m.key === key) { tuneModel(m.anim, info); return; }
+    m.wrap.remove(m.inner);
+    clearGroup(m.inner);
+    const [inner, anim] = buildModel(m.page, info);
+    m.inner = inner; m.anim = anim; m.key = key;
+    m.wrap.add(inner);
+  }
+  function showPage(i) { current = i; }
+  function exitDetail() {
+    for (const m of models) { carousel.remove(m.wrap); clearGroup(m.wrap); }
+    models = [];
+    if (mode === 'detail') {
+      mode = 'hero';
+      wall.position.z = -3.2;
+      art.visible = digits.visible = true;
+      resize();
+    }
   }
 
-  function setNight(night) {
+  let night = false;
+  function setNight(isNight) {
+    night = isNight;
+    scene.fog.color.set(night ? 0x1f1f1f : 0xffffff);
     hemi.intensity = night ? 1.1 : 1.6;
     hemi.groundColor.set(night ? 0x1a1a1a : 0xdedede);
     key.intensity = night ? 1.3 : 2.0;
@@ -434,18 +546,23 @@ export function createWeather3D(container, { onTap } = {}) {
     const d = Math.max(distH, distW) * 1.02;
     camera.position.set(0, cy + 0.1, d);
     camera.lookAt(0, cy, 0);
+    if (mode === 'detail') { scene.fog.near = d + 1.5; scene.fog.far = d + 11; } else { scene.fog.near = 900; scene.fog.far = 1000; }
     camera.updateProjectionMatrix();
   }
   const ro = new ResizeObserver(resize);
   ro.observe(container);
 
   // ----- drag to spin, with inertia, then settle back to the front -----
-  let rotY = 0, rotX = 0, velY = 0, velX = 0, dragging = false, lastX = 0, lastY = 0, idleAt = 0, moved = 0;
+  // In the hero the whole scene turns; on a detail page only that page's model does.
+  const heroRot = { rotY: 0, rotX: 0, velY: 0, velX: 0, idleAt: 0 };
+  const target = () => (mode === 'detail' ? models[current] || heroRot : heroRot);
+  let dragging = false, lastX = 0, lastY = 0, moved = 0, held = heroRot;
   let flash = 0;
   canvas.addEventListener('pointerdown', (e) => {
     dragging = true; moved = 0;
+    held = target();
     lastX = e.clientX; lastY = e.clientY;
-    velX = velY = 0;
+    held.velX = held.velY = 0;
     canvas.setPointerCapture(e.pointerId);
   });
   canvas.addEventListener('pointermove', (e) => {
@@ -453,19 +570,31 @@ export function createWeather3D(container, { onTap } = {}) {
     const dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
     moved += Math.abs(dx) + Math.abs(dy);
-    velY = dx * 0.012;
-    velX = dy * 0.008;
-    rotY += velY;
-    rotX = THREE.MathUtils.clamp(rotX + velX, -0.7, 0.7);
+    held.velY = dx * 0.012;
+    held.velX = dy * 0.008;
+    held.rotY += held.velY;
+    held.rotX = THREE.MathUtils.clamp(held.rotX + held.velX, -0.8, 0.8);
   });
   const up = () => {
     if (!dragging) return;
     dragging = false;
-    idleAt = performance.now();
+    held.idleAt = performance.now();
     if (moved < 6) { flash = 1; onTap?.(); }
   };
   canvas.addEventListener('pointerup', up);
   canvas.addEventListener('pointercancel', up);
+
+  // inertia, then a slow return to the nearest front-facing angle
+  function settle(r, now, active) {
+    if (active) return;
+    r.rotY += r.velY; r.rotX += r.velX;
+    r.velY *= 0.94; r.velX *= 0.9;
+    if (now - r.idleAt > 1800 && Math.abs(r.velY) < 0.002) {
+      const front = Math.round(r.rotY / (Math.PI * 2)) * Math.PI * 2;
+      r.rotY += (front - r.rotY) * 0.05;
+      r.rotX += (0 - r.rotX) * 0.07;
+    }
+  }
 
   // ----- loop -----
   let raf = 0, last = performance.now();
@@ -474,18 +603,9 @@ export function createWeather3D(container, { onTap } = {}) {
     const dt = Math.min(0.05, (now - last) / 1000);
     last = now;
     const t = (now - clock0) / 1000;
-    if (!dragging) {
-      rotY += velY; rotX += velX;
-      velY *= 0.94; velX *= 0.9;
-      // after a pause, ease back to the nearest front-facing angle
-      if (now - idleAt > 1600 && Math.abs(velY) < 0.002) {
-        const target = Math.round(rotY / (Math.PI * 2)) * Math.PI * 2;
-        rotY += (target - rotY) * 0.06;
-        rotX += (0 - rotX) * 0.08;
-      }
-    }
-    spin.rotation.y = rotY + Math.sin(t * 0.5) * 0.05;
-    spin.rotation.x = rotX;
+    settle(heroRot, now, dragging && held === heroRot);
+    spin.rotation.y = heroRot.rotY + Math.sin(t * 0.5) * 0.05;
+    spin.rotation.x = heroRot.rotX;
     for (const [o, x, y, ph, drift] of floaters) {
       o.position.y = y + Math.sin(t * 0.8 + ph) * 0.08;
       o.position.x = x + Math.sin(t * 0.3 + ph) * drift;
@@ -497,20 +617,36 @@ export function createWeather3D(container, { onTap } = {}) {
       m.position.y = SKY_Y - 2 - f[2] * 5;
       m.visible = f[2] < 0.9;
     }
-    if (detailGroup) {
-      if (slide < 1) {
-        slide = Math.min(1, slide + dt / 0.45);
-        const e = 1 - (1 - slide) ** 3;
-        detailGroup.position.x = slideDir * 12 * (1 - e);
-        if (leaving) leaving.position.x = -slideDir * 12 * e;
-        if (slide >= 1 && leaving) { spin.remove(leaving); clearGroup(leaving); leaving = null; }
-      }
-      for (const sp of spinners) sp[0].rotation.y -= sp[1] * dt;
-      for (const f of detailRain) {
-        f[2] = (f[2] + dt * f[1] / 4) % 1;
-        f[0].position.y = 4.2 - f[2] * 4.4;
-        f[0].visible = f[2] < 0.95;
-      }
+    if (models.length) {
+      // slide the carousel toward the chosen page (wrapping round)
+      const N = models.length;
+      let diff = current - pos;
+      diff -= Math.round(diff / N) * N;
+      pos += diff * Math.min(1, dt * 7);
+      models.forEach((m, k) => {
+        let o = k - pos;
+        o -= Math.round(o / N) * N;
+        const a = Math.min(1, Math.abs(o));
+        m.wrap.visible = Math.abs(o) < 1.6;
+        m.wrap.position.set(o * 7.8, 0, -a * 5);
+        m.wrap.scale.setScalar(1 - a * 0.12);
+        settle(m, now, dragging && held === m);
+        m.wrap.rotation.y = m.rotY + Math.sin(t * 0.5 + k) * 0.05;
+        m.wrap.rotation.x = m.rotX;
+        const an = m.anim;
+        if (an.head) an.head.rotation.y -= an.speed * dt;
+        for (const [peb, y, ph] of an.pebbles || []) { peb.position.y = y + Math.sin(t * 0.9 + ph) * 0.12; peb.rotation.y += dt * 0.2; }
+        for (const f of an.rain || []) {
+          f[2] = (f[2] + dt * f[1] / 4) % 1;
+          f[0].position.y = 4.4 - f[2] * 3.9;
+          f[0].visible = f[2] < 0.97;
+        }
+        for (const rp of an.ripples || []) {
+          const k2 = (t * 0.6 + rp[1]) % 1;
+          rp[0].scale.setScalar(0.4 + k2 * 3.2);
+          rp[0].material.opacity = 0.6 * (1 - k2);
+        }
+      });
     }
     if (flash > 0) {
       flash = Math.max(0, flash - dt * 2.2);
@@ -530,15 +666,16 @@ export function createWeather3D(container, { onTap } = {}) {
       mat.moonPhase.uniforms.sunDir.value.set(Math.sin(a), 0, -Math.cos(a)).normalize();
     },
     setText,
-    setDetail,
-    tuneAir,
+    enterDetail,
+    updateDetail,
+    showPage,
+    exitDetail,
     destroy() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       clearGroup(art); clearGroup(digits);
-      if (detailGroup) clearGroup(detailGroup);
-      if (leaving) clearGroup(leaving);
-      [rockMat, metalMat, waterMat].forEach((m) => m.dispose());
+      exitDetail();
+      [rockMat, metalMat, darkMatte, waterMat, rippleMat].forEach((m) => m.dispose());
       Object.values(mat).forEach((m) => m.dispose());
       shared.forEach((g) => g.dispose());
       grain.dispose();
