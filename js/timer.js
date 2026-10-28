@@ -1,7 +1,8 @@
-import { h, emboss, setEmboss, iconBtn, topbar, sheet, store, tick, audio, pop } from './ui.js';
+import { h, emboss, setEmboss, iconBtn, topbar, sheet, store, tick, audio } from './ui.js';
 
 const MAX = 99;
 const pad = (n) => String(n).padStart(2, '0');
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
 
 export default function timer() {
   // mode: idle | running | paused | done
@@ -9,61 +10,93 @@ export default function timer() {
   const save = () => store.set('timer.state', st);
 
   const stage = h('div', { class: 'timer-stage' });
-  const hand = h('div', { class: 'timer-hand' }, h('i'));
   const reel = h('div', { class: 'timer-reel' });
-  const slots = [-2, -1, 0, 1, 2].map((o) => {
-    const num = emboss('0');
+  const SLOTS = [-2, -1, 0, 1, 2];
+  const slots = SLOTS.map(() => {
+    const num = emboss('00');
     const slot = h('div', { class: 'timer-num' }, num);
     reel.append(slot);
-    return { o, slot, num };
+    return { slot, num };
   });
-  const center = slots[2].num.firstElementChild;
   const read = h('div', { class: 'timer-read' });
-  stage.append(hand, reel, read);
+  stage.append(reel, read);
 
-  let drag = 0; // px offset while dragging
-  let step = 300;
+  // The reel position is a continuous number of minutes: dragging moves it freely,
+  // a flick keeps it spinning with friction, and it always comes to rest on a whole minute.
+  let pos = st.minutes;
+  let vel = 0;              // minutes per second
+  let dragging = false;
+  let snapping = false;
+  let lastWhole = Math.round(pos);
+  let step = 300;           // px between numbers
+
   function measure() {
     const fs = parseFloat(getComputedStyle(slots[0].slot).fontSize) || 300;
-    step = fs * 0.9;
+    step = fs * 0.8 * 1.24 + fs * 0.16;
   }
 
-  function msLeft() {
-    if (st.mode === 'running') return Math.max(0, st.endAt - Date.now());
-    if (st.mode === 'paused') return st.remaining;
-    return 0;
+  const msLeft = () => (st.mode === 'running' ? Math.max(0, st.endAt - Date.now()) : st.mode === 'paused' ? st.remaining : 0);
+
+  // the number shown in the middle while counting down
+  function shownMinutes() {
+    const s = Math.ceil(msLeft() / 1000);
+    return s < 60 ? s : Math.ceil(s / 60);
   }
 
   function paint() {
-    const idle = st.mode === 'idle';
-    const ms = msLeft();
-    const s = Math.ceil(ms / 1000);
-    const big = idle ? st.minutes : s < 60 ? s : Math.ceil(s / 60);
-    const shift = drag / step;
-    for (const { o, slot, num } of slots) {
-      const v = big - o; // larger values sit above
-      slot.style.visibility = (idle ? v >= 1 && v <= MAX : o === 0) ? 'visible' : 'hidden';
-      slot.style.transform = `translateY(calc(-50% + ${(o + shift) * step}px))`;
-      slot.style.opacity = o === 0 ? 1 : Math.max(0, 0.7 - Math.abs(o + shift) * 0.2);
-      setEmboss(num, pad(v));
-    }
-    center.classList.toggle('white', st.mode === 'running' || st.mode === 'done');
-    read.textContent = idle ? `${pad(st.minutes)}:00` : `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
-    read.classList.toggle('idle', idle || st.mode === 'paused');
-    // the second hand sweeps once a minute while the timer runs
-    hand.classList.toggle('on', !idle);
-    if (!idle) hand.style.transform = `rotate(${((ms / 1000) % 60) / 60 * 360}deg)`;
+    const counting = st.mode !== 'idle' && !dragging && !moving();
+    const center = counting ? shownMinutes() : pos;
+    const base = Math.round(center);
+    const frac = counting ? 0 : center - base;
+    slots.forEach(({ slot, num }, k) => {
+      const o = SLOTS[k];
+      const v = base - o;                         // larger numbers sit above
+      const y = (o + frac) * step;
+      slot.style.transform = `translate3d(0, calc(-50% + ${y.toFixed(1)}px), 0)`;
+      slot.style.visibility = (counting ? o === 0 : v >= 1 && v <= MAX) ? 'visible' : 'hidden';
+      setEmboss(num, pad(clamp(v, 0, 99)));
+    });
+    const s = Math.ceil(msLeft() / 1000);
+    read.textContent = st.mode === 'idle' || !counting ? '' : `${pad(Math.floor(s / 60))}:${pad(s % 60)}`;
+    read.classList.toggle('dim', st.mode === 'paused');
     el.classList.toggle('timer-done', st.mode === 'done');
   }
 
-  let raf = 0;
-  let lastWhole = -1;
-  function loop() {
+  const moving = () => Math.abs(vel) > 0.01 || snapping;
+
+  // ---- physics ----
+  function physics(dt) {
+    if (dragging) return;
+    if (Math.abs(vel) > 0.6) {
+      pos += vel * dt;
+      vel *= Math.pow(0.22, dt);                  // friction: a flick coasts for a while
+      if (pos < 1 || pos > MAX) { pos = clamp(pos, 1, MAX); vel = 0; }
+    } else {
+      // spring onto the nearest whole minute
+      const target = clamp(Math.round(pos + vel * 0.15), 1, MAX);
+      const k = 1 - Math.pow(0.0008, dt);
+      pos += (target - pos) * k;
+      vel = 0;
+      snapping = Math.abs(target - pos) > 0.002;
+      if (!snapping) {
+        pos = target;
+        if (st.minutes !== target) { st.minutes = target; save(); }
+      }
+    }
+    const whole = Math.round(pos);
+    if (whole !== lastWhole) { lastWhole = whole; tick(2400, 0.01, 0.045); }
+  }
+
+  let raf = 0, last = performance.now(), lastSec = -1;
+  function loop(now) {
+    const dt = Math.min(0.05, (now - last) / 1000);
+    last = now;
+    physics(dt);
     if (st.mode === 'running') {
       const left = st.endAt - Date.now();
-      const whole = Math.ceil(left / 1000);
-      if (whole !== lastWhole) { lastWhole = whole; if (whole <= 5 && whole > 0) tick(1200, 0.03, 0.06); }
-      if (left <= 0) { st.mode = 'done'; save(); pop(center); }
+      const sec = Math.ceil(left / 1000);
+      if (sec !== lastSec) { lastSec = sec; if (sec <= 5 && sec > 0) tick(1200, 0.03, 0.06); }
+      if (left <= 0) { st.mode = 'done'; save(); glow(true); }
     }
     if (st.mode === 'done') ring();
     paint();
@@ -93,84 +126,102 @@ export default function timer() {
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
   }
 
-  function tap() {
+  // white plaster flash: the numerals light up white, hold, then fade back to dark
+  function glow(loopIt = false) {
+    const c = slots[2].num.firstElementChild;
+    c.classList.remove('lit', 'lit-loop');
+    void c.offsetWidth;
+    c.classList.add(loopIt ? 'lit-loop' : 'lit');
+    if (!loopIt) c.addEventListener('animationend', () => c.classList.remove('lit'), { once: true });
+  }
+
+  function start() {
     audio(); // unlock audio inside the user gesture
-    if (st.mode === 'idle') {
-      st.total = st.minutes * 60000;
-      st.endAt = Date.now() + st.total;
-      st.mode = 'running';
-      tick(700, 0.05);
-    } else if (st.mode === 'running') {
-      st.remaining = st.endAt - Date.now();
-      st.mode = 'paused';
-      tick(900);
-    } else if (st.mode === 'paused') {
-      st.endAt = Date.now() + st.remaining;
-      st.mode = 'running';
-      tick(700);
-    } else {
-      st.mode = 'idle';
-      tick(600);
-    }
+    st.minutes = clamp(Math.round(pos), 1, MAX);
+    pos = st.minutes;
+    st.total = st.minutes * 60000;
+    st.endAt = Date.now() + st.total;
+    st.mode = 'running';
     save();
-    paint();
-    pop(center);
+    tick(700, 0.05);
+    glow();
+  }
+
+  function tap() {
+    if (st.mode === 'idle') return start();
+    if (st.mode === 'running') { st.remaining = st.endAt - Date.now(); st.mode = 'paused'; tick(900); }
+    else if (st.mode === 'paused') { st.endAt = Date.now() + st.remaining; st.mode = 'running'; tick(700); glow(); }
+    else { st.mode = 'idle'; pos = st.minutes; slots[2].num.firstElementChild.classList.remove('lit-loop'); tick(600); }
+    save();
   }
 
   function reset() {
     st.mode = 'idle';
     st.total = 0;
+    pos = st.minutes;
+    slots[2].num.firstElementChild.classList.remove('lit-loop');
     save();
-    paint();
-    pop(center);
     tick(600);
   }
 
-  // gestures: vertical drag adjusts minutes when idle; tap toggles; long press resets
-  let y0 = null, moved = false, pressTimer = 0, lastSteps = 0;
+  // ---- gestures: drag the reel freely (even while counting), tap to start/pause, hold to reset ----
+  let y0 = 0, pos0 = 0, moved = false, pressTimer = 0, samples = [];
   stage.addEventListener('pointerdown', (e) => {
-    y0 = e.clientY; moved = false; lastSteps = 0;
     stage.setPointerCapture(e.pointerId);
+    y0 = e.clientY;
+    moved = false; samples = [];
     pressTimer = setTimeout(() => {
-      if (!moved && (st.mode === 'paused' || st.mode === 'running')) { reset(); y0 = null; }
+      if (!moved && (st.mode === 'paused' || st.mode === 'running')) { reset(); pressTimer = -1; }
     }, 650);
+    dragging = true;
+    // catch a spinning reel, or pick up from the number on screen while counting
+    if (st.mode !== 'idle' && !moving()) pos = shownMinutes() || st.minutes;
+    vel = 0; snapping = false;
+    pos0 = pos;
   });
   stage.addEventListener('pointermove', (e) => {
-    if (y0 == null) return;
+    if (!dragging) return;
     const dy = e.clientY - y0;
-    if (Math.abs(dy) > 8) { moved = true; clearTimeout(pressTimer); }
-    if (!moved || st.mode !== 'idle') return;
-    const steps = Math.round(dy / step);
-    const target = Math.min(MAX, Math.max(1, st.minutes + (steps - lastSteps)));
-    if (target !== st.minutes) { st.minutes = target; tick(2200, 0.012); }
-    lastSteps = steps;
-    drag = dy - steps * step;
-    if ((st.minutes === MAX && drag > 0) || (st.minutes === 1 && drag < 0)) drag *= 0.3;
+    if (!moved && Math.abs(dy) > 6) {
+      moved = true;
+      clearTimeout(pressTimer);
+      // choosing a new time while counting stops the countdown
+      if (st.mode !== 'idle') { st.mode = 'idle'; save(); slots[2].num.firstElementChild.classList.remove('lit-loop'); }
+    }
+    if (!moved) return;
+    const now = performance.now();
+    samples.push([now, e.clientY]);
+    samples = samples.filter(([t]) => now - t < 90);
+    let p = pos0 + dy / step;
+    // rubber band past the ends
+    if (p < 1) p = 1 - (1 - p) * 0.3;
+    if (p > MAX) p = MAX + (p - MAX) * 0.3;
+    pos = p;
   });
   const end = () => {
+    if (!dragging) return;
+    dragging = false;
     clearTimeout(pressTimer);
-    if (y0 == null) return;
-    y0 = null;
+    if (pressTimer === -1) return;
     if (!moved) { tap(); return; }
-    const from = drag;
-    const t0 = performance.now();
-    const settle = (t) => {
-      const k = Math.min(1, (t - t0) / 220);
-      drag = from * (1 - k) ** 3;
-      if (k < 1) requestAnimationFrame(settle); else drag = 0;
-    };
-    requestAnimationFrame(settle);
-    save();
+    // fling speed from the last few samples; a finger that stopped before lifting doesn't fling
+    const nowT = performance.now();
+    samples = samples.filter(([t]) => nowT - t < 100);
+    if (samples.length > 1) {
+      const [t0, ya] = samples[0], [t1, yb] = samples[samples.length - 1];
+      vel = t1 > t0 ? (((yb - ya) / step) / ((t1 - t0) / 1000)) * 1.6 : 0;
+      vel = clamp(vel, -80, 80);
+    }
+    if (pos < 1 || pos > MAX) vel = 0;
   };
   stage.addEventListener('pointerup', end);
   stage.addEventListener('pointercancel', end);
 
   stage.addEventListener('wheel', (e) => {
-    if (st.mode !== 'idle') return;
     e.preventDefault();
-    st.minutes = Math.min(MAX, Math.max(1, st.minutes + (e.deltaY > 0 ? -1 : 1)));
-    tick(2200, 0.012);
-    save();
+    if (st.mode !== 'idle') { st.mode = 'idle'; save(); }
+    pos = clamp(pos - e.deltaY / step, 1, MAX);
+    vel = 0;
   }, { passive: false });
 
   function openSettings() {
@@ -178,9 +229,9 @@ export default function timer() {
       p.append(h('h3', {}, 'タイマー'));
       const presets = [1, 3, 5, 10, 15, 25, 30, 45, 60];
       p.append(h('div', { class: 'seg' }, presets.map((m) =>
-        h('button', { class: st.minutes === m ? 'on' : '', onclick: () => { st.minutes = m; st.mode = 'idle'; save(); close(); pop(center); } }, `${m}分`))));
+        h('button', { class: st.minutes === m ? 'on' : '', onclick: () => { reset(); st.minutes = m; pos = m; save(); close(); } }, `${m}分`))));
       p.append(
-        h('div', { class: 'row' }, h('span', { class: 'val' }, 'タップ: スタート / 一時停止　長押し: リセット')),
+        h('div', { class: 'row' }, h('span', { class: 'val' }, '上下にスワイプで時間を選ぶ　タップ: スタート / 一時停止　長押し: リセット')),
         h('button', { class: 'btn', onclick: () => { reset(); close(); } }, 'リセット'),
         h('button', { class: 'btn', onclick: () => { store.set('settings.sound', !store.get('settings.sound', true)); close(); } },
           `操作音: ${store.get('settings.sound', true) ? 'オン' : 'オフ'}`));
@@ -191,7 +242,8 @@ export default function timer() {
     topbar({ right: [iconBtn('sliders', openSettings, '設定')] }),
     stage);
 
-  requestAnimationFrame(() => { measure(); loop(); });
+  if (st.mode === 'done') glow(true);
+  requestAnimationFrame(() => { measure(); raf = requestAnimationFrame(loop); });
   const onResize = () => measure();
   window.addEventListener('resize', onResize);
 
