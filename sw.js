@@ -1,5 +1,6 @@
-// Offline support: app shell is cache-first, everything else network-first.
-const VERSION = 'quint-v3';
+// Offline support: always try the network first so updates show up right away,
+// and fall back to the cache only when offline.
+const VERSION = 'quint-v4';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/main.js', 'js/ui.js', 'js/calculator.js', 'js/weather.js', 'js/timer.js',
@@ -9,7 +10,10 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // cache: 'reload' skips the HTTP cache so a new version never stores stale files
+  e.waitUntil(caches.open(VERSION)
+    .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (e) => {
@@ -26,11 +30,13 @@ self.addEventListener('fetch', (e) => {
   if (url.hostname.endsWith('open-meteo.com')) return;
 
   if (url.origin === location.origin) {
-    e.respondWith(caches.match(req, { ignoreSearch: true }).then((hit) => hit || fetch(req).then((res) => {
-      const copy = res.clone();
-      caches.open(VERSION).then((c) => c.put(req, copy));
+    e.respondWith(fetch(req, { cache: 'no-cache' }).then((res) => {
+      if (res.ok) {
+        const copy = res.clone();
+        caches.open(VERSION).then((c) => c.put(req, copy));
+      }
       return res;
-    })));
+    }).catch(() => caches.match(req, { ignoreSearch: true })));
     return;
   }
   // fonts and other cross-origin assets: network first, fall back to cache
