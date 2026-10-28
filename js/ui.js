@@ -5,7 +5,11 @@ export function h(tag, attrs = {}, ...children) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v == null || v === false) continue;
     if (k === 'class') el.className = v;
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') {
+      for (const [sk, sv] of Object.entries(v)) {
+        if (sk.startsWith('--')) el.style.setProperty(sk, sv); else el.style[sk] = sv;
+      }
+    }
     else if (k.startsWith('on')) el.addEventListener(k.slice(2).toLowerCase(), v);
     else if (k === 'html') el.innerHTML = v;
     else el.setAttribute(k, v === true ? '' : v);
@@ -35,6 +39,8 @@ export function pop(el) {
   el.classList.remove('pop');
   void el.offsetWidth;
   el.classList.add('pop');
+  // drop the class afterwards: a lingering will-change breaks background-clip:text in some engines
+  el.addEventListener('animationend', () => el.classList.remove('pop'), { once: true });
 }
 export function setEmboss(wrap, text) {
   const el = wrap.firstElementChild;
@@ -125,8 +131,35 @@ export function audio() {
   return audioCtx;
 }
 
-// Short synthesized click, used as a tactile substitute where vibration is unavailable (iOS).
+// Haptic tap. Android has navigator.vibrate; iOS Safari has no vibration API, but
+// toggling a native <input type="checkbox" switch> (iOS 18+) plays the system's
+// light "tick", so a hidden one is flipped instead. Needs to run inside a touch.
+let hapticLabel;
+let lastHaptic = 0;
+export function haptic() {
+  if (!store.get('settings.haptics', true)) return;
+  const now = performance.now();
+  if (now - lastHaptic < 28) return; // the engine can't keep up with faster taps
+  lastHaptic = now;
+  if (navigator.vibrate) { navigator.vibrate(8); return; }
+  if (!hapticLabel) {
+    const input = document.createElement('input');
+    input.type = 'checkbox';
+    input.setAttribute('switch', '');
+    input.id = 'quint-haptic';
+    hapticLabel = document.createElement('label');
+    hapticLabel.htmlFor = input.id;
+    const box = document.createElement('div');
+    box.style.cssText = 'position:fixed;width:1px;height:1px;overflow:hidden;opacity:0;pointer-events:none;left:-10px;top:-10px';
+    box.append(input, hapticLabel);
+    document.body.append(box);
+  }
+  hapticLabel.click();
+}
+
+// A tactile tick: haptic plus a very short synthesized click (sound can be turned off).
 export function tick(freq = 1800, dur = 0.018, gain = 0.08) {
+  haptic();
   if (!store.get('settings.sound', true)) return;
   const ctx = audio();
   if (!ctx) return;
@@ -139,7 +172,6 @@ export function tick(freq = 1800, dur = 0.018, gain = 0.08) {
   o.connect(g).connect(ctx.destination);
   o.start();
   o.stop(ctx.currentTime + dur + 0.01);
-  if (navigator.vibrate) navigator.vibrate(8);
 }
 
 export function todayKey(d = new Date()) {

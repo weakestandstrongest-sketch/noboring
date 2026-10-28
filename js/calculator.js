@@ -60,10 +60,11 @@ export function format(n) {
 export default function calculator() {
   let expr = store.get('calc.expr', '');
   let justEvaluated = false;
+  let lastExpr = '';
   const history = store.get('calc.history', []);
 
-  const exprEl = h('div', { class: 'calc-expr' });
-  const result = emboss('0');
+  const exprEl = h('div', { class: 'calc-expr title' });
+  const result = emboss('0', { variant: 'white' });
   const resultBox = h('div', { class: 'calc-result' }, result);
   result.addEventListener('click', () => { pop(result.firstElementChild); tick(); });
 
@@ -78,14 +79,23 @@ export default function calculator() {
   function paint() {
     exprEl.replaceChildren(...[...expr].map((c) =>
       OPS[c] ? h('span', { class: 'op' }, OPS[c]) : c === '%' ? h('span', { class: 'op' }, '%') : c));
+    // after "=", the line above shows the sum that was solved, e.g. 5×6=
+    if (justEvaluated && lastExpr) {
+      exprEl.replaceChildren(...[...lastExpr].map((c) => (OPS[c] || c === '%' ? h('span', { class: 'op' }, OPS[c] || c) : c)), h('span', { class: 'eq' }, '='));
+    }
     exprEl.scrollLeft = exprEl.scrollWidth;
     const text = justEvaluated ? format(evaluate(expr || '0')) : preview();
     setEmboss(result, text);
-    // shrink to fit: big numbers get smaller
-    const len = text.length;
-    const base = Math.min(window.innerWidth * 0.36, 168);
-    const fs = `${Math.round(Math.max(48, base * Math.min(1, 5.2 / Math.max(len, 1))))}px`;
-    if (result.firstElementChild.style.fontSize !== fs) result.firstElementChild.style.fontSize = fs;
+    // tall numerals that shrink to fit the width as the number grows
+    const num = result.firstElementChild;
+    const display = resultBox.parentElement;
+    const availW = (display?.clientWidth || 360) - 44;
+    const availH = (display?.clientHeight || 300) - 20;
+    let fs = Math.min(availH * 0.78, 320);
+    num.style.fontSize = `${fs}px`;
+    const w = num.getBoundingClientRect().width;
+    if (w > availW) fs = Math.max(40, fs * (availW / w));
+    num.style.fontSize = `${Math.round(fs)}px`;
     store.set('calc.expr', expr);
   }
 
@@ -99,12 +109,13 @@ export default function calculator() {
       try {
         const v = evaluate(expr.replace(/[-+*/]+$/, ''));
         if (!isFinite(v)) throw 0;
+        lastExpr = expr.replace(/[-+*/]+$/, '');
         history.unshift({ e: expr, r: v });
         history.length = Math.min(history.length, 50);
         store.set('calc.history', history);
         expr = String(parseFloat(v.toPrecision(12)));
         justEvaluated = true;
-        setTimeout(() => pop(result.firstElementChild));
+        setTimeout(() => { pop(result.firstElementChild); burst(); });
       } catch { flashError(); return; }
     }
     else if ('+-*/'.includes(k)) {
@@ -137,20 +148,35 @@ export default function calculator() {
     paint();
   }
 
+  // white light rays shooting out from behind the answer
+  function burst() {
+    const rays = h('div', { class: 'calc-rays' });
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * 360 + (Math.random() - 0.5) * 16;
+      rays.append(h('i', { style: {
+        '--a': `${a}deg`, '--len': `${50 + Math.random() * 90}px`,
+        '--r0': `${60 + Math.random() * 30}px`, '--r1': `${170 + Math.random() * 120}px`,
+        animationDelay: `${Math.random() * 0.08}s`,
+      } }));
+    }
+    resultBox.append(rays);
+    setTimeout(() => rays.remove(), 900);
+  }
+
   function flashError() {
     resultBox.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-10px)' }, { transform: 'translateX(10px)' }, { transform: 'translateX(0)' }], { duration: 260 });
   }
 
   const layout = [
-    ['C', 'fn'], ['±', 'fn'], ['%', 'fn'], ['/', 'op'],
+    ['C', 'fn'], ['%', 'fn'], ['⌫', 'fn'], ['/', 'op'],
     ['7'], ['8'], ['9'], ['*', 'op'],
     ['4'], ['5'], ['6'], ['-', 'op'],
     ['1'], ['2'], ['3'], ['+', 'op'],
-    ['0'], ['.'], ['⌫', 'fn'], ['=', 'eq'],
+    ['0'], ['.'], ['±'], ['=', 'eq'],
   ];
   const keyEls = {};
   const keys = h('div', { class: 'calc-keys' }, layout.map(([k, cls = '']) => {
-    const label = k === '⌫' ? null : OPS[k] || k;
+    const label = k === '⌫' ? null : k === '±' ? '+/-' : OPS[k] || k;
     const b = h('button', { class: `key ${cls}`, 'data-k': k, html: k === '⌫' ? icons.backspace : null }, label);
     b.addEventListener('pointerdown', (e) => { e.preventDefault(); lite(b); input(k); });
     keyEls[k] = b;
@@ -187,13 +213,15 @@ export default function calculator() {
       p.append(
         h('button', { class: 'btn danger', onclick: () => { history.length = 0; store.set('calc.history', []); close(); } }, '履歴を消去'),
         h('button', { class: 'btn', onclick: () => { store.set('settings.sound', !store.get('settings.sound', true)); close(); } },
-          `操作音: ${store.get('settings.sound', true) ? 'オン' : 'オフ'}`));
+          `操作音: ${store.get('settings.sound', true) ? 'オン' : 'オフ'}`),
+        h('button', { class: 'btn', onclick: () => { store.set('settings.haptics', !store.get('settings.haptics', true)); close(); } },
+          `振動: ${store.get('settings.haptics', true) ? 'オン' : 'オフ'}`));
     });
   }
 
   const el = h('div', { class: 'screen calculator' },
-    topbar({ right: [iconBtn('sliders', openHistory, '履歴と設定')] }),
-    h('div', { class: 'calc-display' }, exprEl, resultBox),
+    topbar({ title: exprEl, right: [iconBtn('sliders', openHistory, '履歴と設定')] }),
+    h('div', { class: 'calc-display' }, resultBox),
     keys);
 
   // swipe left/right on the display deletes the last character
@@ -205,5 +233,7 @@ export default function calculator() {
   });
 
   requestAnimationFrame(paint);
-  return { el, destroy: () => window.removeEventListener('keydown', onKey) };
+  const onResize = () => paint();
+  window.addEventListener('resize', onResize);
+  return { el, destroy: () => { window.removeEventListener('keydown', onKey); window.removeEventListener('resize', onResize); } };
 }
