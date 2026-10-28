@@ -3,7 +3,7 @@ import { CHAPTERS, STAGES, CHAPTER_ICONS, sceneSVG } from './journey.js';
 
 const TOTAL = STAGES.length;
 
-export default function habits({ back }) {
+export default function habits() {
   let list = store.get('habits.list', []);
   let selId = store.get('habits.sel', list[0]?.id);
   let view = null; // stage being viewed (1..TOTAL); null = current
@@ -182,7 +182,7 @@ export default function habits({ back }) {
 
   const el = h('div', { class: 'screen habits' },
     h('div', { class: 'topbar habit-head' },
-      h('div', { class: 'group' }, iconBtn('back', back, '戻る'), iconBtn('plus', add, '習慣を追加')),
+      h('div', { class: 'group' }, iconBtn('plus', add, '習慣を追加')),
       nameBtn,
       h('div', { class: 'group' }, iconBtn('sliders', openSettings, '設定'))),
     body, hint);

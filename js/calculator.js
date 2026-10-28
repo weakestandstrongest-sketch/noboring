@@ -1,4 +1,4 @@
-import { h, emboss, setEmboss, iconBtn, topbar, sheet, store, tick, icons } from './ui.js';
+import { h, emboss, setEmboss, iconBtn, topbar, sheet, store, tick, icons, pop } from './ui.js';
 
 const OPS = { '+': '+', '-': '−', '*': '×', '/': '÷' };
 
@@ -57,7 +57,7 @@ export function format(n) {
   return dec ? `${grouped}.${dec}` : grouped;
 }
 
-export default function calculator({ back }) {
+export default function calculator() {
   let expr = store.get('calc.expr', '');
   let justEvaluated = false;
   const history = store.get('calc.history', []);
@@ -65,6 +65,7 @@ export default function calculator({ back }) {
   const exprEl = h('div', { class: 'calc-expr' });
   const result = emboss('0');
   const resultBox = h('div', { class: 'calc-result' }, result);
+  result.addEventListener('click', () => { pop(result.firstElementChild); tick(); });
 
   function preview() {
     if (!expr) return '0';
@@ -102,6 +103,7 @@ export default function calculator({ back }) {
         store.set('calc.history', history);
         expr = String(parseFloat(v.toPrecision(12)));
         justEvaluated = true;
+        setTimeout(() => pop(result.firstElementChild));
       } catch { flashError(); return; }
     }
     else if ('+-*/'.includes(k)) {
@@ -149,10 +151,16 @@ export default function calculator({ back }) {
   const keys = h('div', { class: 'calc-keys' }, layout.map(([k, cls = '']) => {
     const label = k === '⌫' ? null : OPS[k] || k;
     const b = h('button', { class: `key ${cls}`, 'data-k': k, html: k === '⌫' ? icons.backspace : null }, label);
-    b.addEventListener('pointerdown', (e) => { e.preventDefault(); input(k); });
+    b.addEventListener('pointerdown', (e) => { e.preventDefault(); lite(b); input(k); });
     keyEls[k] = b;
     return b;
   }));
+
+  function lite(b) {
+    b.classList.remove('lit');
+    void b.offsetWidth;
+    b.classList.add('lit');
+  }
 
   function onKey(e) {
     const map = { Enter: '=', Backspace: '⌫', Escape: 'C', '×': '*', '÷': '/' };
@@ -160,6 +168,7 @@ export default function calculator({ back }) {
     if (keyEls[k]) {
       e.preventDefault();
       keyEls[k].classList.add('down');
+      lite(keyEls[k]);
       setTimeout(() => keyEls[k].classList.remove('down'), 90);
       input(k);
     }
@@ -182,7 +191,7 @@ export default function calculator({ back }) {
   }
 
   const el = h('div', { class: 'screen calculator' },
-    topbar({ left: [iconBtn('back', back, '戻る')], right: [iconBtn('sliders', openHistory, '履歴と設定')] }),
+    topbar({ right: [iconBtn('sliders', openHistory, '履歴と設定')] }),
     h('div', { class: 'calc-display' }, exprEl, resultBox),
     keys);
 

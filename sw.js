@@ -1,5 +1,5 @@
 // Offline support: app shell is cache-first, everything else network-first.
-const VERSION = 'quint-v1';
+const VERSION = 'quint-v2';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/main.js', 'js/ui.js', 'js/calculator.js', 'js/weather.js', 'js/timer.js',

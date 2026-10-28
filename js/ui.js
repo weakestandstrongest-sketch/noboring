@@ -24,11 +24,17 @@ export function svg(markup) {
 }
 
 // 3D extruded text. The ::before pseudo-element draws the extrusion from data-t.
-export function emboss(text, { size, light = false, cls = '' } = {}) {
-  const el = h('span', { class: `emboss ${light ? 'light' : ''} ${cls}`, 'data-t': text });
+export function emboss(text, { size, variant = '', cls = '' } = {}) {
+  const el = h('span', { class: `emboss ${variant} ${cls}`, 'data-t': text });
   el.textContent = text;
   if (size) el.style.fontSize = size;
   return h('span', { class: 'emboss-wrap' }, el);
+}
+// Replays the white flash on a number.
+export function pop(el) {
+  el.classList.remove('pop');
+  void el.offsetWidth;
+  el.classList.add('pop');
 }
 export function setEmboss(wrap, text) {
   const el = wrap.firstElementChild;
@@ -38,6 +44,8 @@ export function setEmboss(wrap, text) {
 }
 
 export const icons = {
+  location: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.5 2.5 2.8 10.6c-.8.4-.7 1.5.1 1.7l7.2 1.6 1.6 7.2c.2.9 1.3 1 1.7.1z"/></svg>',
+  dots: '<svg viewBox="0 0 6 30" fill="currentColor"><circle cx="3" cy="3" r="2.6"/><circle cx="3" cy="15" r="2.6"/><circle cx="3" cy="27" r="2.6"/></svg>',
   back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
   plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 4v16M4 12h16"/></svg>',
   sliders: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="2" y="6.2" width="20" height="2.6" rx="1.3"/><rect x="2" y="15.2" width="20" height="2.6" rx="1.3"/><circle cx="8" cy="7.5" r="3.3"/><circle cx="16" cy="16.5" r="3.3"/><circle cx="20.2" cy="7.5" r="1.5" fill="#1f1f1f"/><circle cx="3.8" cy="16.5" r="1.5" fill="#1f1f1f"/></svg>',

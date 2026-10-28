@@ -1,4 +1,4 @@
-import { h, emboss, iconBtn, topbar, sheet, store, toast } from './ui.js';
+import { h, emboss, setEmboss, iconBtn, icons, topbar, sheet, store, toast, tick, pop } from './ui.js';
 
 // WMO weather codes → [label, kind]
 const CODES = {
@@ -13,60 +13,78 @@ const CODES = {
 };
 const code = (c) => CODES[c] || ['—', 'cloudy'];
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
-
 const DEFAULT_PLACE = { name: '東京', lat: 35.6812, lon: 139.7671 };
 
-function art(kind, isDay, scale = 1) {
-  const box = h('div', { class: 'wx-art' });
-  const add = (cls, x, y, size, delay = 0) => {
-    const b = h('div', { class: `blob ${cls} floaty`, style: {
-      left: `${x}%`, top: `${y}%`, width: `${size * scale}px`, height: `${size * scale}px`, animationDelay: `${delay}s`,
-    } });
-    box.append(b);
-    return b;
-  };
-  const light = kind === 'snow' || kind === 'fog';
-  const celestial = isDay ? 'sun' : 'moon';
-  if (kind === 'clear') add(celestial, 34, 10, 200);
-  if (kind === 'partly') { add(celestial, 46, 6, 170); add('cloud', 14, 30, 150, 0.5); add('cloud', 44, 34, 120, 1); add('cloud', 70, 42, 64, 1.5); add('cloud', 6, 50, 36, 2); }
-  if (['cloudy', 'rain', 'storm', 'snow', 'fog'].includes(kind)) {
-    const c = light ? 'cloud light' : 'cloud';
-    if (kind === 'cloudy') add(celestial, 56, 4, 110);
-    add(c, 8, 18, 170, 0); add(c, 40, 12, 190, 0.7); add(c, 66, 28, 120, 1.4); add(c, 2, 40, 54, 2); add(c, 82, 46, 40, 2.6);
-  }
-  if (kind === 'rain' || kind === 'storm') {
-    for (let i = 0; i < 18; i++) {
-      box.append(h('div', { class: 'drop', style: {
-        left: `${12 + Math.random() * 76}%`, top: `${48 + Math.random() * 8}%`, height: `${14 + Math.random() * 16}px`,
-        animationDelay: `${Math.random()}s`, animationDuration: `${0.7 + Math.random() * 0.5}s`,
-      } }));
-    }
-  }
-  if (kind === 'snow') {
-    for (let i = 0; i < 16; i++) {
-      box.append(h('div', { class: 'flake', style: {
-        left: `${10 + Math.random() * 80}%`, top: `${46 + Math.random() * 10}%`, animationDelay: `${Math.random() * 3}s`,
-      } }));
-    }
-  }
-  if (kind === 'storm') {
-    box.append(h('div', { style: { position: 'absolute', left: '48%', top: '50%', width: '0', height: '0',
-      borderLeft: '18px solid transparent', borderRight: '18px solid transparent', borderTop: `70px solid var(--accent-hot)`,
-      transform: 'skewX(-18deg)', filter: 'drop-shadow(0 0 18px rgba(255,214,10,.6))' } }));
-  }
-  return box;
+// ---------- art: glossy grainy spheres, like little sculptures ----------
+function sphere(id, cx, cy, r, cls = '') {
+  return `<circle class="${cls}" cx="${cx}" cy="${cy}" r="${r}" fill="url(#${id})"/>`;
+}
+function streak(x, y, w, rot, op = 1) {
+  return `<ellipse cx="${x}" cy="${y}" rx="${w}" ry="2.6" fill="currentColor" opacity="${op}" transform="rotate(${rot} ${x} ${y})"/>`;
 }
 
-function miniIcon(kind, isDay = true) {
-  const sun = isDay ? '#ff3b1f' : '#e8e2c8';
-  const cloud = '<circle cx="12" cy="18" r="7" fill="#1a1a1a" stroke="#555" stroke-width=".6"/><circle cx="20" cy="17" r="8" fill="#1a1a1a" stroke="#555" stroke-width=".6"/><circle cx="26" cy="21" r="4" fill="#1a1a1a" stroke="#555" stroke-width=".6"/>';
+export function artSVG(kind, isDay) {
+  const cloudGrad = kind === 'snow' || kind === 'fog' ? 'gCloudLight' : 'gCloud';
+  const sun = isDay
+    ? sphere('gSun', 200, 118, 112)
+    : `<g>${sphere('gMoon', 200, 118, 112)}<path d="M266 30a112 112 0 0 1 0 176a120 120 0 0 0 0-176z" fill="#000" opacity=".55"/></g>`;
+  const shadow = (x, w) => `<ellipse cx="${x}" cy="246" rx="${w}" ry="10" fill="currentColor" opacity="${isDay ? 0.08 : 0.25}" filter="url(#blur)"/>`;
+  let body = '';
+  const clouds = (list) => list.map(([x, y, r, d]) => `<g class="wx-float" style="animation-delay:${d}s">${sphere(cloudGrad, x, y, r)}</g>`).join('');
+
+  if (kind === 'clear') {
+    body = shadow(200, 90) + sun + streak(150, 30, 46, -6, 0.9) + streak(290, 44, 40, 8, 0.8);
+  } else if (kind === 'partly') {
+    body = shadow(170, 70) + shadow(300, 50) + sun
+      + clouds([[92, 150, 46, 0], [80, 196, 30, 1], [140, 192, 34, 1.5], [200, 120, 40, .5], [250, 128, 44, 2], [190, 186, 54, 1], [345, 186, 18, 3]])
+      + streak(140, 34, 44, -4) + streak(300, 30, 44, 6) + streak(150, 82, 34, -3) + streak(270, 148, 50, 10, .9) + streak(76, 168, 16, -20);
+  } else {
+    const bigSun = kind === 'cloudy' ? `<g opacity=".9" transform="translate(70 -10) scale(.6)">${sun}</g>` : '';
+    body = shadow(200, 120) + bigSun
+      + clouds([[110, 130, 58, 0], [190, 100, 66, .7], [270, 132, 56, 1.4], [160, 178, 50, 2], [235, 186, 46, .3], [70, 186, 30, 1.1], [330, 176, 26, 2.4]])
+      + streak(110, 52, 40, -6) + streak(300, 60, 44, 8) + streak(200, 214, 60, 3, .8);
+    if (kind === 'rain' || kind === 'storm') {
+      for (let i = 0; i < 16; i++) {
+        const x = 80 + ((i * 53) % 240), y = 200 + ((i * 29) % 20);
+        body += `<rect class="wx-drop" style="animation-delay:${(i * 0.13) % 1}s" x="${x}" y="${y}" width="5" height="${16 + (i % 3) * 6}" rx="2.5" fill="#2f7fe0"/>`;
+      }
+    }
+    if (kind === 'snow') {
+      for (let i = 0; i < 14; i++) {
+        body += `<circle class="wx-drop" style="animation-delay:${(i * 0.21) % 1}s;animation-duration:2.4s" cx="${80 + ((i * 47) % 240)}" cy="${205 + ((i * 13) % 20)}" r="5" fill="${isDay ? '#9a9a9a' : '#fff'}"/>`;
+      }
+    }
+    if (kind === 'storm') body += '<path d="M205 190l-26 46h22l-12 40 40-56h-22l14-30z" fill="#ffd60a"/>';
+    if (kind === 'fog') body += [0, 1, 2].map((i) => `<rect x="${70 + i * 20}" y="${206 + i * 16}" width="${260 - i * 40}" height="9" rx="4.5" fill="currentColor" opacity=".35"/>`).join('');
+  }
+
+  return `<svg viewBox="0 0 400 260" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="gSun" cx=".38" cy=".32" r=".75"><stop offset="0" stop-color="#ff5c52"/><stop offset=".55" stop-color="#ff1c22"/><stop offset="1" stop-color="#c8000c"/></radialGradient>
+    <radialGradient id="gMoon" cx=".3" cy=".3" r=".8"><stop offset="0" stop-color="#ffffff"/><stop offset=".55" stop-color="#e9ecec"/><stop offset="1" stop-color="#8e9a98"/></radialGradient>
+    <radialGradient id="gCloud" cx=".35" cy=".28" r=".8"><stop offset="0" stop-color="#5a5a5a"/><stop offset=".35" stop-color="#1e1e1e"/><stop offset="1" stop-color="#030303"/></radialGradient>
+    <radialGradient id="gCloudLight" cx=".35" cy=".28" r=".8"><stop offset="0" stop-color="#ffffff"/><stop offset=".5" stop-color="#d4d4d4"/><stop offset="1" stop-color="#8a8a8a"/></radialGradient>
+    <filter id="grain" x="0" y="0" width="100%" height="100%">
+      <feTurbulence type="fractalNoise" baseFrequency="1.1" numOctaves="2" seed="3" result="n"/>
+      <feColorMatrix in="n" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .55 0" result="a"/>
+      <feComposite in="a" in2="SourceGraphic" operator="in" result="g"/>
+      <feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="g"/></feMerge>
+    </filter>
+    <filter id="blur"><feGaussianBlur stdDeviation="8"/></filter>
+  </defs>
+  <g filter="url(#grain)">${body}</g>
+</svg>`;
+}
+
+function miniIcon(kind) {
+  const cloud = '<circle cx="12" cy="18" r="7" fill="#1a1a1a" stroke="#666" stroke-width=".6"/><circle cx="20" cy="17" r="8" fill="#1a1a1a" stroke="#666" stroke-width=".6"/><circle cx="26" cy="21" r="4" fill="#1a1a1a" stroke="#666" stroke-width=".6"/>';
   const m = {
-    clear: `<circle cx="16" cy="16" r="9" fill="${sun}"/>`,
-    partly: `<circle cx="20" cy="11" r="7" fill="${sun}"/>${cloud}`,
+    clear: '<circle cx="16" cy="16" r="10" fill="#ff1c22"/>',
+    partly: `<circle cx="20" cy="11" r="8" fill="#ff1c22"/>${cloud}`,
     cloudy: cloud,
-    fog: `${cloud}<path d="M6 27h20M9 30h14" stroke="#888" stroke-width="2" stroke-linecap="round"/>`,
-    rain: `${cloud}<path d="M11 26l-1 4M17 26l-1 4M23 26l-1 4" stroke="#5aa9ff" stroke-width="2" stroke-linecap="round"/>`,
-    snow: `${cloud}<circle cx="11" cy="28" r="1.6" fill="#fff"/><circle cx="17" cy="29" r="1.6" fill="#fff"/><circle cx="23" cy="28" r="1.6" fill="#fff"/>`,
+    fog: `${cloud}<path d="M6 27h20M9 31h14" stroke="#888" stroke-width="2" stroke-linecap="round"/>`,
+    rain: `${cloud}<path d="M11 26l-1 5M17 26l-1 5M23 26l-1 5" stroke="#3b8cff" stroke-width="2" stroke-linecap="round"/>`,
+    snow: `${cloud}<circle cx="11" cy="29" r="1.8" fill="#fff"/><circle cx="17" cy="30" r="1.8" fill="#fff"/><circle cx="23" cy="29" r="1.8" fill="#fff"/>`,
     storm: `${cloud}<path d="M17 23l-4 6h4l-2 4" stroke="#ffd60a" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
   };
   const s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -76,10 +94,14 @@ function miniIcon(kind, isDay = true) {
   return s;
 }
 
+const MOON_ICON = '<svg viewBox="0 0 16 16"><path d="M8 1a7 7 0 0 0 0 14z" fill="currentColor"/><circle cx="8" cy="8" r="6.3" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
+const SUN_ICON = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#ff1c22"/></svg>';
+
+// ---------- data ----------
 async function fetchForecast(place, unit) {
   const p = new URLSearchParams({
     latitude: place.lat, longitude: place.lon, timezone: 'auto', forecast_days: 7,
-    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m,precipitation',
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m',
     hourly: 'temperature_2m,weather_code,precipitation_probability,is_day',
     daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset',
     temperature_unit: unit === 'F' ? 'fahrenheit' : 'celsius',
@@ -96,104 +118,215 @@ async function searchPlace(q) {
   return (j.results || []).map((x) => ({ name: x.name, sub: [x.admin1, x.country].filter(Boolean).join(', '), lat: x.latitude, lon: x.longitude }));
 }
 
+async function placeName(lat, lon) {
+  try {
+    const r = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?${new URLSearchParams({ latitude: lat, longitude: lon, localityLanguage: 'ja' })}`);
+    const j = await r.json();
+    return j.city || j.locality || j.principalSubdivision || '現在地';
+  } catch { return '現在地'; }
+}
+
 function locate() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) return reject(new Error('no geolocation'));
     navigator.geolocation.getCurrentPosition(
-      (p) => resolve({ name: '現在地', lat: p.coords.latitude, lon: p.coords.longitude, gps: true }),
+      async (p) => {
+        const { latitude: lat, longitude: lon } = p.coords;
+        resolve({ name: await placeName(lat, lon), lat, lon, gps: true });
+      },
       reject, { timeout: 8000, maximumAge: 10 * 60000 });
   });
 }
 
-export default function weather({ back }) {
+// ---------- screen ----------
+export default function weather({ setTone }) {
   let place = store.get('weather.place', null);
   const unit = () => store.get('weather.unit', 'C');
+  let data = null;
+  let hours = [];   // next 24 hours [{t, code, pp, day, time}]
+  let sel = null;   // index into hours while scrubbing
+
   const placeBtn = h('button', { class: 'title wx-place', onclick: () => openPlaces() });
-  const scroll = h('div', { class: 'weather-scroll' });
-  let alive = true;
+  const main = h('div', { class: 'wx-main' });
+  const el = h('div', { class: 'screen weather' },
+    topbar({ title: placeBtn, right: [iconBtn('sliders', openSettings, '設定')] }),
+    main);
+
+  function setNight(night) {
+    if (!alive) return;
+    el.classList.toggle('night', night);
+    setTone(night ? 'dark' : 'light');
+  }
 
   function message(text, retry) {
-    scroll.replaceChildren(h('div', { class: 'wx-msg' }, text, h('br'),
-      retry && h('button', { class: 'btn', onclick: retry }, '再読み込み')));
+    main.replaceChildren(h('div', { class: 'wx-msg' }, h('div', {}, text, h('br'),
+      retry && h('button', { class: 'btn', onclick: retry }, '再読み込み'))));
   }
 
   async function load() {
+    setNight(new Date().getHours() < 5 || new Date().getHours() >= 18);
     if (!place) {
+      message('現在地を取得しています…');
       try { place = await locate(); } catch { place = DEFAULT_PLACE; }
       store.set('weather.place', place);
     }
-    placeBtn.textContent = place.name;
+    placeBtn.innerHTML = '';
+    placeBtn.append(...(place.gps ? [h('span', { html: icons.location })] : []), place.name);
+    const key = `${place.lat},${place.lon},${unit()}`;
     const cached = store.get('weather.cache', null);
-    if (cached && cached.key === `${place.lat},${place.lon},${unit()}`) renderData(cached.data);
+    if (cached?.key === key) build(cached.data);
     else message('読み込み中…');
     try {
-      const data = await fetchForecast(place, unit());
+      const d = await fetchForecast(place, unit());
       if (!alive) return;
-      store.set('weather.cache', { key: `${place.lat},${place.lon},${unit()}`, at: Date.now(), data });
-      renderData(data);
-    } catch (e) {
+      store.set('weather.cache', { key, at: Date.now(), data: d });
+      build(d);
+    } catch {
       if (!alive) return;
-      if (!cached) message('天気を取得できませんでした。通信状況を確認してください。', load);
+      if (!cached || cached.key !== key) message('天気を取得できませんでした。\n通信状況を確認してください。', load);
       else toast('オフライン: 前回のデータを表示中');
     }
   }
 
-  function renderData(d) {
+  // hero pieces, rebuilt by build() and updated by show()
+  let artBox, tempNum, condEl, scrub, cursor, bubble, track, shownKey = '';
+
+  function build(d) {
+    data = d;
     const c = d.current;
-    const [label, kind] = code(c.weather_code);
-    const isDay = !!c.is_day;
-    const t = Math.round(c.temperature_2m);
-    const hero = h('div', { class: 'wx-hero' },
-      art(kind, isDay),
-      h('div', { class: 'wx-temp' }, emboss(`${t}°`)),
-      h('div', { class: 'wx-cond' },
-        h('div', { class: 'c' }, label),
-        h('div', { class: 's' }, `体感 ${Math.round(c.apparent_temperature)}°`),
-        h('div', { class: 's' }, `${Math.round(d.daily.temperature_2m_max[0])}° / ${Math.round(d.daily.temperature_2m_min[0])}°`)));
-
-    // next 24 hours from the current hour
-    const nowIdx = Math.max(0, d.hourly.time.findIndex((x) => x >= c.time.slice(0, 13)));
-    const hours = d.hourly.time.slice(nowIdx, nowIdx + 24).map((time, i) => ({
-      time, t: d.hourly.temperature_2m[nowIdx + i], pp: d.hourly.precipitation_probability?.[nowIdx + i] ?? 0,
+    const start = Math.max(0, d.hourly.time.findIndex((x) => x >= c.time.slice(0, 13)));
+    hours = d.hourly.time.slice(start, start + 24).map((time, i) => ({
+      time, t: d.hourly.temperature_2m[start + i], code: d.hourly.weather_code[start + i],
+      pp: d.hourly.precipitation_probability?.[start + i] ?? 0, day: !!d.hourly.is_day?.[start + i],
     }));
-    const tmin = Math.min(...hours.map((x) => x.t));
-    const tmax = Math.max(...hours.map((x) => x.t));
-    const hourEls = hours.map((x, i) => h('div', { class: 'wx-hour' },
-      h('div', { class: 'v' }, `${Math.round(x.t)}°`),
-      h('div', { class: 'barbox' }, h('div', { class: `bar ${x.pp >= 50 ? 'rain' : ''}`, style: { height: `${20 + 70 * ((x.t - tmin) / ((tmax - tmin) || 1))}px` } })),
-      h('div', { class: 't' }, i === 0 ? '今' : `${+x.time.slice(11, 13)}時`),
-      h('div', { class: 't', style: { color: x.pp >= 30 ? '#5aa9ff' : 'transparent' } }, `${x.pp}%`)));
+    // hour 0 is "now": use the current conditions
+    if (hours[0]) Object.assign(hours[0], { t: c.temperature_2m, code: c.weather_code, day: !!c.is_day });
 
-    const dmin = Math.min(...d.daily.temperature_2m_min);
-    const dmax = Math.max(...d.daily.temperature_2m_max);
-    const days = d.daily.time.map((day, i) => {
-      const lo = d.daily.temperature_2m_min[i], hi = d.daily.temperature_2m_max[i];
-      const span = (dmax - dmin) || 1;
-      return h('div', { class: 'wx-day' },
-        h('div', { class: 'd' }, i === 0 ? '今日' : `${WD[new Date(day + 'T00:00').getDay()]}曜`),
-        miniIcon(code(d.daily.weather_code[i])[1]),
-        h('div', { class: 'lo' }, `${Math.round(lo)}°`),
-        h('div', { class: 'range' }, h('i', { style: { left: `${((lo - dmin) / span) * 100}%`, right: `${100 - ((hi - dmin) / span) * 100}%` } })),
-        h('div', { class: 'hi' }, `${Math.round(hi)}°`));
-    });
+    artBox = h('div', { class: 'wx-art' });
+    tempNum = emboss('0', { variant: 'ink' });
+    tempNum.addEventListener('click', () => { pop(tempNum.firstElementChild); tick(); });
+    condEl = h('div', { class: 'wx-cond' });
 
-    const hm = (iso) => iso ? iso.slice(11, 16) : '—';
-    const stats = h('div', { class: 'wx-stats' },
-      stat('湿度', `${c.relative_humidity_2m}`, '%'),
-      stat('風速', `${Math.round(c.wind_speed_10m)}`, 'km/h'),
-      stat('降水確率', `${d.daily.precipitation_probability_max?.[0] ?? 0}`, '%'),
-      stat('UV指数', `${Math.round(d.daily.uv_index_max?.[0] ?? 0)}`, ''),
-      stat('日の出', hm(d.daily.sunrise?.[0]), ''),
-      stat('日の入り', hm(d.daily.sunset?.[0]), ''));
+    // timeline bar
+    const n = hours.length;
+    const temps = hours.map((x) => x.t);
+    const lo = Math.min(...temps), hi = Math.max(...temps);
+    const segs = hours.map((x) => h('div', { class: 'seg-h', 'data-day': x.day ? 1 : 0, 'data-k': (x.t - lo) / ((hi - lo) || 1) }));
+    track = h('div', { class: 'wx-track' }, segs);
+    const pos = (i) => `${((i + 0.5) / n) * 100}%`;
+    const iLo = temps.indexOf(lo), iHi = temps.indexOf(hi);
+    const marks = [];
+    if (iLo > 2) marks.push(h('span', { class: 'mark', style: { left: pos(iLo) } }, Math.round(lo)));
+    if (iHi > 2 && Math.abs(iHi - iLo) > 2) marks.push(h('span', { class: 'mark', style: { left: pos(iHi) } }, Math.round(hi)));
+    for (let i = 1; i < n; i++) {
+      if (hours[i].day !== hours[i - 1].day && i > 2 && Math.abs(i - iLo) > 1 && Math.abs(i - iHi) > 1) {
+        marks.push(h('span', { class: 'mark', style: { left: pos(i) }, html: hours[i].day ? SUN_ICON : MOON_ICON }));
+      }
+    }
+    track.append(h('div', { class: 'now' }, Math.round(hours[0].t)), ...marks, cursor = h('div', { class: 'wx-cursor' }));
+    const precip = h('div', { class: 'wx-precip' }, hours.map((x) => h('i', { style: { height: `${x.pp}%` } })));
+    const labels = h('div', { class: 'wx-hours' }, hours.map((x, i) => {
+      const hr = +x.time.slice(11, 13);
+      if (i === 0) return h('span', { style: { left: pos(0) } }, '今');
+      if (hr % 3 || i < 2) return null;
+      return h('span', { style: { left: pos(i) } }, String(hr));
+    }));
+    bubble = h('div', { class: 'wx-bubble' });
+    scrub = h('div', { class: 'wx-scrub' }, precip, bubble,
+      h('div', { class: 'wx-row' }, track, h('button', { class: 'wx-more', 'aria-label': '詳細', html: icons.dots, onclick: openDetails })),
+      labels);
+    bindScrub();
 
-    scroll.replaceChildren(hero,
-      h('div', { class: 'wx-section' }, h('h4', {}, '24 HOURS'), h('div', { class: 'wx-hours' }, hourEls)),
-      h('div', { class: 'wx-section' }, h('h4', {}, '7 DAYS'), days),
-      h('div', { class: 'wx-section' }, h('h4', {}, 'DETAILS'), stats));
+    main.replaceChildren(artBox, h('div', { class: 'wx-temp' }, tempNum), condEl, scrub);
+    shownKey = '';
+    show(null);
   }
 
-  function stat(k, v, unitLabel) {
-    return h('div', { class: 'wx-stat' }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v, unitLabel && h('small', {}, ` ${unitLabel}`)));
+  function show(i) {
+    if (!alive) return;
+    sel = i;
+    const x = hours[i ?? 0];
+    if (!x) return;
+    const [label, kind] = code(x.code);
+    const night = !x.day;
+    setNight(night);
+    const key = `${kind}${night}`;
+    if (key !== shownKey) {
+      shownKey = key;
+      artBox.innerHTML = artSVG(kind, x.day);
+      artBox.classList.remove('wx-swap'); void artBox.offsetWidth; artBox.classList.add('wx-swap');
+    }
+    setEmboss(tempNum, String(Math.round(x.t)));
+    condEl.textContent = label;
+    // shade the bar: daylight hours darker on a light screen, lighter on a dark one
+    track.style.background = night ? '#2c2c2c' : '#f1f1ef';
+    for (const s of track.querySelectorAll('.seg-h')) {
+      const k = +s.dataset.k;
+      const day = s.dataset.day === '1';
+      s.style.background = night
+        ? (day ? `hsl(0 0% ${45 + k * 30}%)` : 'transparent')
+        : (day ? `hsl(60 3% ${88 - k * 14}%)` : 'transparent');
+    }
+  }
+
+  function bindScrub() {
+    const idxAt = (clientX) => {
+      const r = track.getBoundingClientRect();
+      return Math.min(hours.length - 1, Math.max(0, Math.floor(((clientX - r.left) / r.width) * hours.length)));
+    };
+    const move = (clientX) => {
+      const i = idxAt(clientX);
+      const r = track.getBoundingClientRect();
+      const sr = scrub.getBoundingClientRect();
+      const x = Math.min(r.right, Math.max(r.left, clientX));
+      cursor.style.left = `${x - r.left}px`;
+      bubble.style.left = `${x - sr.left}px`;
+      bubble.textContent = `${+hours[i].time.slice(11, 13)}:00`;
+      if (i !== sel) { show(i); tick(2400, 0.01, 0.05); }
+    };
+    let active = false;
+    track.addEventListener('pointerdown', (e) => {
+      active = true;
+      track.setPointerCapture(e.pointerId);
+      scrub.classList.add('active');
+      move(e.clientX);
+    });
+    track.addEventListener('pointermove', (e) => { if (active) move(e.clientX); });
+    const end = () => {
+      if (!active) return;
+      active = false;
+      scrub.classList.remove('active');
+      setTimeout(() => { if (!active) show(null); }, 250);
+    };
+    track.addEventListener('pointerup', end);
+    track.addEventListener('pointercancel', end);
+  }
+
+  function openDetails() {
+    if (!data) return;
+    const d = data, c = d.current;
+    const dmin = Math.min(...d.daily.temperature_2m_min), dmax = Math.max(...d.daily.temperature_2m_max);
+    const hm = (iso) => iso ? iso.slice(11, 16) : '—';
+    const stat = (k, v, u) => h('div', { class: 'wx-stat' }, h('div', { class: 'k' }, k), h('div', { class: 'v' }, v, u && h('small', {}, ` ${u}`)));
+    sheet((p) => {
+      p.append(h('h3', {}, place.name), h('h4', {}, '7 DAYS'));
+      d.daily.time.forEach((day, i) => {
+        const lo = d.daily.temperature_2m_min[i], hi = d.daily.temperature_2m_max[i], span = (dmax - dmin) || 1;
+        p.append(h('div', { class: 'wx-day' },
+          h('div', {}, i === 0 ? '今日' : `${WD[new Date(day + 'T00:00').getDay()]}曜`),
+          miniIcon(code(d.daily.weather_code[i])[1]),
+          h('div', { class: 'lo' }, `${Math.round(lo)}°`),
+          h('div', { class: 'range' }, h('i', { style: { left: `${((lo - dmin) / span) * 100}%`, right: `${100 - ((hi - dmin) / span) * 100}%` } })),
+          h('div', { class: 'hi' }, `${Math.round(hi)}°`)));
+      });
+      p.append(h('h4', {}, 'DETAILS'), h('div', { class: 'wx-stats' },
+        stat('体感', `${Math.round(c.apparent_temperature)}°`),
+        stat('湿度', `${c.relative_humidity_2m}`, '%'),
+        stat('風速', `${Math.round(c.wind_speed_10m)}`, 'km/h'),
+        stat('降水確率', `${d.daily.precipitation_probability_max?.[0] ?? 0}`, '%'),
+        stat('日の出', hm(d.daily.sunrise?.[0])),
+        stat('日の入り', hm(d.daily.sunset?.[0]))));
+    });
   }
 
   function setPlace(p) {
@@ -239,9 +372,7 @@ export default function weather({ back }) {
     });
   }
 
-  const el = h('div', { class: 'screen weather' },
-    topbar({ left: [iconBtn('back', back, '戻る')], title: placeBtn, right: [iconBtn('sliders', openSettings, '設定')] }),
-    scroll);
+  let alive = true;
   load();
   return { el, destroy: () => { alive = false; } };
 }
