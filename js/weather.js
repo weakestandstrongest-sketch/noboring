@@ -2,7 +2,7 @@ import { h, emboss, setEmboss, iconBtn, icons, topbar, sheet, store, toast, tick
 
 // WMO weather codes → [label, kind]
 const CODES = {
-  0: ['快晴', 'clear'], 1: ['晴れ', 'clear'], 2: ['晴れ時々曇り', 'partly'], 3: ['曇り', 'cloudy'],
+  0: ['晴天', 'clear'], 1: ['ほぼ快晴', 'clear'], 2: ['晴れ時々曇り', 'partly'], 3: ['曇り', 'cloudy'],
   45: ['霧', 'fog'], 48: ['霧氷', 'fog'],
   51: ['弱い霧雨', 'rain'], 53: ['霧雨', 'rain'], 55: ['強い霧雨', 'rain'], 56: ['着氷性の霧雨', 'rain'], 57: ['着氷性の霧雨', 'rain'],
   61: ['小雨', 'rain'], 63: ['雨', 'rain'], 65: ['大雨', 'rain'], 66: ['着氷性の雨', 'rain'], 67: ['着氷性の大雨', 'rain'],
@@ -101,8 +101,8 @@ const SUN_ICON = '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="#ff
 async function fetchForecast(place, unit) {
   const p = new URLSearchParams({
     latitude: place.lat, longitude: place.lon, timezone: 'auto', forecast_days: 7,
-    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m',
-    hourly: 'temperature_2m,weather_code,precipitation_probability,is_day',
+    current: 'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,is_day,wind_speed_10m,cloud_cover',
+    hourly: 'temperature_2m,weather_code,precipitation_probability,is_day,cloud_cover',
     daily: 'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,uv_index_max,sunrise,sunset',
     temperature_unit: unit === 'F' ? 'fahrenheit' : 'celsius',
   });
@@ -203,9 +203,10 @@ export default function weather({ setTone }) {
     hours = d.hourly.time.slice(start, start + 24).map((time, i) => ({
       time, t: d.hourly.temperature_2m[start + i], code: d.hourly.weather_code[start + i],
       pp: d.hourly.precipitation_probability?.[start + i] ?? 0, day: !!d.hourly.is_day?.[start + i],
+      cc: d.hourly.cloud_cover?.[start + i] ?? null,
     }));
     // hour 0 is "now": use the current conditions
-    if (hours[0]) Object.assign(hours[0], { t: c.temperature_2m, code: c.weather_code, day: !!c.is_day });
+    if (hours[0]) Object.assign(hours[0], { t: c.temperature_2m, code: c.weather_code, day: !!c.is_day, cc: c.cloud_cover ?? hours[0].cc });
 
     // 3D scene you can spin; flat SVG + CSS numerals if WebGL is unavailable
     hero?.destroy();
@@ -263,13 +264,16 @@ export default function weather({ setTone }) {
     sel = i;
     const x = hours[i ?? 0];
     if (!x) return;
-    const [label, kind] = code(x.code);
+    let [label, kind] = code(x.code);
+    // cloud cover in % (fallback guessed from the weather code)
+    const cover = x.cc ?? { clear: 10, partly: 45, cloudy: 95 }[kind] ?? 90;
+    if (x.code === 3 && cover < 90) label = 'ほぼ曇り';
     const night = !x.day;
     setNight(night);
-    const key = `${kind}${night}`;
+    const key = `${kind}${night}${Math.round(cover / 15)}`;
     if (key !== shownKey) {
       shownKey = key;
-      if (hero) hero.setScene(kind, x.day);
+      if (hero) hero.setScene(kind, x.day, cover, Math.round(cover) * 31 + x.code * 7 + 3);
       else {
         artBox.innerHTML = artSVG(kind, x.day);
         artBox.classList.remove('wx-swap'); void artBox.offsetWidth; artBox.classList.add('wx-swap');

@@ -1,5 +1,6 @@
-// Weather hero as a real 3D scene: grainy sun/moon, glossy cloud spheres and
-// thick extruded numerals. Drag to spin it all the way around.
+// Weather hero as a real 3D scene: a matte sun or moon, lumpy clouds and tall
+// chamfered numerals, lit like a studio shot against a white wall that catches
+// soft shadows. Drag to spin it all the way around.
 import * as THREE from '../vendor/three.module.min.js';
 
 let fontPromise;
@@ -31,12 +32,12 @@ function textShapes(font, text, size) {
       }
     }
     shapes.push(...path.toShapes());
-    x += g.ha * scale * 0.96;
+    x += g.ha * scale * 0.94;
   }
   return shapes;
 }
 
-// fine noise used as a bump/roughness map so surfaces look sandblasted
+// fine noise used as a bump map so surfaces look sandblasted
 function grainTexture() {
   const c = document.createElement('canvas');
   c.width = c.height = 256;
@@ -50,78 +51,88 @@ function grainTexture() {
   ctx.putImageData(img, 0, 0);
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(3, 3);
+  t.repeat.set(4, 4);
   return t;
 }
+
+// deterministic random so a given forecast always draws the same clouds
+function rng(seed) {
+  let s = seed % 2147483647 || 1;
+  return () => ((s = (s * 16807) % 2147483647) - 1) / 2147483646;
+}
+
+const SKY_Y = 7.4;      // centre of the sun / moon
+const DIGIT_TOP = 4.4;  // numerals run from -4.2 up to here
 
 export function createWeather3D(container, { onTap } = {}) {
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.shadowMap.enabled = true;
-  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  renderer.shadowMap.type = THREE.VSMShadowMap; // soft, blurry shadows on the wall
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  // no filmic tone mapping: keeps the whites white and the red vivid, like a bright studio shot
   renderer.toneMapping = THREE.NoToneMapping;
   const canvas = renderer.domElement;
   canvas.style.touchAction = 'none';
   container.append(canvas);
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 200);
+  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 200);
   const grain = grainTexture();
 
-  const hemi = new THREE.HemisphereLight(0xffffff, 0xe4e4e4, 1.7);
-  const key = new THREE.DirectionalLight(0xffffff, 1.9);
-  key.position.set(-6, 14, 10);
-  key.castShadow = true;
-  key.shadow.mapSize.set(1024, 1024);
-  key.shadow.camera.left = -10; key.shadow.camera.right = 10;
-  key.shadow.camera.top = 12; key.shadow.camera.bottom = -8;
-  key.shadow.radius = 8;
-  key.shadow.bias = -0.0008;
-  const fill = new THREE.DirectionalLight(0xffffff, 0.75);
-  fill.position.set(6, 3, 12);
-  const rim = new THREE.DirectionalLight(0xffffff, 0.5);
-  rim.position.set(8, 4, -6);
-  // warm bounce from the sun onto the tops of the numerals
-  const glow = new THREE.PointLight(0xff2a2a, 0, 7, 1.6);
-  glow.position.set(0, 3.4, 1.6);
-  scene.add(hemi, key, fill, rim, glow);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0xdedede, 1.6);
+  // key light from high on the right: lights the chamfers, keeps the faces dark
+  const key = new THREE.DirectionalLight(0xffffff, 2.0);
+  key.position.set(7, 9, 12);
+  // a nearly invisible light in front casts the shadows, so they stay short and
+  // fall just down-left of each object on the wall
+  const caster = new THREE.DirectionalLight(0xffffff, 0.001);
+  caster.position.set(5, 3.5, 14);
+  caster.castShadow = true;
+  caster.shadow.mapSize.set(1024, 1024);
+  caster.shadow.camera.left = -12; caster.shadow.camera.right = 12;
+  caster.shadow.camera.top = 14; caster.shadow.camera.bottom = -10;
+  caster.shadow.camera.near = 1; caster.shadow.camera.far = 50;
+  caster.shadow.radius = 14;
+  caster.shadow.blurSamples = 16;
+  caster.shadow.bias = -0.0005;
+  const fill = new THREE.DirectionalLight(0xffffff, 0.7);
+  fill.position.set(-8, 2, 10);
+  // red bounce from the sun onto the tops of the numerals
+  const glow = new THREE.PointLight(0xff1a24, 0, 6, 1.4);
+  glow.position.set(0, DIGIT_TOP + 1.2, 1.4);
+  scene.add(hemi, key, caster, fill, glow);
 
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(60, 60), new THREE.ShadowMaterial({ opacity: 0.09 }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -3.35;
-  ground.receiveShadow = true;
-  scene.add(ground);
+  const wall = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), new THREE.ShadowMaterial({ opacity: 0.11 }));
+  wall.position.z = -3.2;
+  wall.receiveShadow = true;
+  scene.add(wall);
 
   const spin = new THREE.Group();     // rotated by the user
   const art = new THREE.Group();
   const digits = new THREE.Group();
-  art.position.y = 0.9; // keep the sky clear of the numerals
   spin.add(art, digits);
   scene.add(spin);
 
   const mat = {
-    sun: new THREE.MeshStandardMaterial({ color: 0xff2b2b, roughness: 0.62, bumpMap: grain, bumpScale: 0.35, emissive: 0x7a0606 }),
-    moon: new THREE.MeshStandardMaterial({ color: 0xf7f7f2, roughness: 0.9, bumpMap: grain, bumpScale: 0.4, emissive: 0x3a3a36 }),
-    crater: new THREE.MeshStandardMaterial({ color: 0xd9dad3, roughness: 0.95 }),
-    cloud: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.36, bumpMap: grain, bumpScale: 0.2 }),
-    cloudLight: new THREE.MeshStandardMaterial({ color: 0xf4f4f4, roughness: 0.55, bumpMap: grain, bumpScale: 0.2 }),
-    streak: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.4 }),
-    drop: new THREE.MeshStandardMaterial({ color: 0x3b8cff, roughness: 0.25, emissive: 0x0a2a66 }),
+    sun: new THREE.MeshStandardMaterial({ color: 0xff1f2c, roughness: 0.75, bumpMap: grain, bumpScale: 0.5, emissive: 0x8a0410 }),
+    moon: new THREE.MeshStandardMaterial({ color: 0xf6f6f2, roughness: 0.9, bumpMap: grain, bumpScale: 0.5, emissive: 0x2a2a28 }),
+    moonShade: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.38, depthWrite: false }),
+    cloud: new THREE.MeshStandardMaterial({ color: 0x232323, roughness: 0.8, bumpMap: grain, bumpScale: 0.45 }),
+    cloudLight: new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.8, bumpMap: grain, bumpScale: 0.45 }),
+    drop: new THREE.MeshStandardMaterial({ color: 0x3b8cff, roughness: 0.3, emissive: 0x0a2a66 }),
     snow: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.7, emissive: 0x333333 }),
-    star: new THREE.MeshStandardMaterial({ color: 0xfff6c8, emissive: 0xfff0a0, emissiveIntensity: 0.8 }),
-    bolt: new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.45, emissive: 0x8a6400 }),
-    digit: new THREE.MeshStandardMaterial({ color: 0x2c2c2c, roughness: 0.38, metalness: 0.05, bumpMap: grain, bumpScale: 0.12 }),
+    star: new THREE.MeshStandardMaterial({ color: 0xfff6c8, emissive: 0xfff0a0, emissiveIntensity: 0.9 }),
+    bolt: new THREE.MeshStandardMaterial({ color: 0xffd60a, roughness: 0.5, emissive: 0x8a6400 }),
+    digit: new THREE.MeshStandardMaterial({ color: 0x171717, roughness: 0.55, bumpMap: grain, bumpScale: 0.3 }),
   };
   const sphereGeo = new THREE.SphereGeometry(1, 64, 48);
-  const arcGeo = new THREE.TorusGeometry(1.2, 0.085, 12, 40, 0.9);
-  // teardrop raindrop: a lathe profile, round at the bottom and pointed on top
+  // teardrop raindrop: round at the bottom, pointed on top
   const dropGeo = new THREE.LatheGeometry(
     Array.from({ length: 14 }, (_, i) => {
       const t = i / 13;
       return new THREE.Vector2(Math.sin(Math.PI * t) * (1 - t * 0.85) * 0.16, -0.16 + t * 0.5);
     }), 20);
+  const shared = [sphereGeo, dropGeo];
 
   function add(group, geo, material, pos, scale = 1) {
     const m = new THREE.Mesh(geo, material);
@@ -134,102 +145,95 @@ export function createWeather3D(container, { onTap } = {}) {
   }
 
   const floaters = [];  // [object, baseX, baseY, phase, drift]
-  const fallers = [];   // [mesh, x, z, speed, phase]
+  const fallers = [];   // [mesh, speed, phase]
   const twinklers = []; // [mesh, phase]
-  let breather = null;  // sun/moon gently breathes
 
   function clearGroup(g) {
     for (const c of [...g.children]) {
       g.remove(c);
-      c.traverse?.((o) => { if (o.geometry && ![sphereGeo, arcGeo, dropGeo].includes(o.geometry)) o.geometry.dispose(); });
+      c.traverse?.((o) => { if (o.geometry && !shared.includes(o.geometry)) o.geometry.dispose(); });
     }
   }
 
-  // a puffy cloud: one big ball, two shoulders and a couple of little bumps, flat-ish bottom
-  function puff(x, y, z, size, m) {
+  // a cloud: a heap of squashed matte lumps, biggest in the middle
+  function cloudMass(r, cx, cy, cz, width, lumps, size, m) {
     const g = new THREE.Group();
-    const balls = [[0, 0.25, 0, 1], [-0.9, -0.05, 0.1, 0.72], [0.95, -0.02, 0.05, 0.78], [-1.6, -0.3, 0.2, 0.42], [1.7, -0.28, 0.15, 0.45], [0.2, -0.35, 0.45, 0.62]];
-    for (const [bx, by, bz, r] of balls) add(g, sphereGeo, m, [bx, by, bz], [r, r * 0.9, r]);
-    g.position.set(x, y, z);
-    g.scale.setScalar(size);
-    art.add(g);
-    floaters.push([g, x, y, Math.random() * 6, 0.12 + Math.random() * 0.1]);
-    return g;
-  }
-  function swoosh(x, y, z, size, rot, flip = 1) {
-    const s = add(art, arcGeo, mat.streak, [x, y, z], [size * flip, size, size]);
-    s.rotation.z = rot;
-    s.castShadow = false;
-    floaters.push([s, x, y, Math.random() * 6, 0.25]);
-  }
-  function celestialBody(isDay, pos, r) {
-    const body = add(art, sphereGeo, isDay ? mat.sun : mat.moon, pos, r);
-    breather = [body, r];
-    if (!isDay) {
-      for (const [cx, cy, cr] of [[-0.35, 0.3, 0.2], [0.25, -0.2, 0.14], [0.1, 0.45, 0.09], [-0.15, -0.45, 0.12]]) {
-        const v = new THREE.Vector3(cx, cy, Math.sqrt(Math.max(0, 1 - cx * cx - cy * cy)) * 0.93);
-        const c = add(body, sphereGeo, mat.crater, v.toArray(), [cr, cr, cr * 0.35]);
-        c.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), v.clone().normalize());
-      }
-      for (let i = 0; i < 9; i++) {
-        const st = add(art, sphereGeo, mat.star, [-4.2 + Math.random() * 8.4, 3 + Math.random() * 6.5, -2 - Math.random() * 2], 0.06 + Math.random() * 0.06);
-        st.castShadow = false;
-        twinklers.push([st, Math.random() * 6]);
-      }
-    } else {
-      glow.intensity = 6;
+    for (let i = 0; i < lumps; i++) {
+      const t = lumps === 1 ? 0.5 : i / (lumps - 1);
+      const x = (t - 0.5) * width + (r() - 0.5) * 0.5;
+      const edge = 1 - Math.abs(t - 0.5) * 1.3;
+      const s = size * (0.45 + edge * 0.55) * (0.8 + r() * 0.4);
+      const y = (r() - 0.3) * size * 0.6 + edge * size * 0.35;
+      add(g, sphereGeo, m, [x, y, (r() - 0.5) * size * 0.8], [s * (1.05 + r() * 0.25), s * 0.85, s]);
     }
-    return body;
+    g.position.set(cx, cy, cz);
+    art.add(g);
+    floaters.push([g, cx, cy, r() * 6, 0.15 + r() * 0.15]);
   }
 
-  function buildArt(kind, isDay) {
+  function buildArt(kind, isDay, cover, seed) {
     clearGroup(art);
     floaters.length = 0;
     fallers.length = 0;
     twinklers.length = 0;
-    breather = null;
-    glow.intensity = 0;
+    const r = rng(seed);
     const cm = kind === 'snow' || kind === 'fog' ? mat.cloudLight : mat.cloud;
-    if (kind === 'clear') {
-      celestialBody(isDay, [0, 5.3, -0.4], 2.8);
-      swoosh(-2.6, 7.6, 1.0, 1.0, 0.5); swoosh(2.8, 6.4, 1.2, 0.9, -0.2, -1);
-    } else if (kind === 'partly') {
-      celestialBody(isDay, [0.6, 5.7, -1.2], 2.6);
-      puff(-1.3, 4.1, 1.4, 1.2, cm);
-      puff(2.8, 3.9, 0.9, 0.75, cm);
-      swoosh(-2.8, 7.3, 0.4, 0.9, 0.55); swoosh(3.2, 7.2, 0.2, 0.8, -0.3, -1); swoosh(1.2, 2.9, 2.4, 0.7, -0.1, -1);
-    } else {
-      if (kind === 'cloudy') celestialBody(isDay, [2.2, 6.9, -2.4], 1.5);
-      puff(-1.6, 5.6, 0.0, 1.25, cm);
-      puff(1.8, 5.0, 0.6, 1.1, cm);
-      puff(-0.2, 3.9, 1.5, 0.9, cm);
-      swoosh(-3.2, 7.6, 0.4, 0.8, 0.5); swoosh(3.4, 7.1, 0.3, 0.75, -0.3, -1);
-      if (kind === 'rain' || kind === 'storm') {
-        for (let i = 0; i < 18; i++) {
-          const x = -3.2 + Math.random() * 6.4, z = -0.2 + Math.random() * 2.4;
-          fallers.push([add(art, dropGeo, mat.drop, [x, 3, z], 1.1), x, z, 4 + Math.random() * 1.5, Math.random()]);
-        }
+    const overcast = kind !== 'clear' && kind !== 'partly';
+
+    // sun or moon, peeking out from behind the clouds
+    const body = add(art, sphereGeo, isDay ? mat.sun : mat.moon, [0, SKY_Y, -1.2], 2.75);
+    glow.intensity = isDay ? (overcast ? 2 : 7) : 0;
+    if (!isDay) {
+      // dark side of the moon on the right
+      const shade = add(body, sphereGeo, mat.moonShade, [0.22, 0, 0.02], 1.01);
+      shade.castShadow = false;
+      shade.renderOrder = 1;
+      for (let i = 0; i < 10; i++) {
+        const st = add(art, sphereGeo, mat.star, [-4.5 + r() * 9, SKY_Y - 2 + r() * 5.5, -2.8], 0.07);
+        st.castShadow = false;
+        twinklers.push([st, r() * 6]);
       }
-      if (kind === 'snow') {
-        for (let i = 0; i < 24; i++) {
-          const x = -3.4 + Math.random() * 6.8, z = -0.4 + Math.random() * 2.4;
-          fallers.push([add(art, sphereGeo, mat.snow, [x, 3, z], 0.12 + Math.random() * 0.06), x, z, 1.0 + Math.random() * 0.5, Math.random()]);
-        }
+    }
+
+    // clouds grow with cloud cover
+    const c = Math.max(0, Math.min(1, cover / 100));
+    if (overcast) {
+      cloudMass(r, -0.2, SKY_Y - 1.2, 0.6, 7.6, 9, 1.55, cm);
+      cloudMass(r, 0.6, SKY_Y + 0.3, -0.2, 4.2, 4, 1.4, cm);
+    } else if (c > 0.12 && c < 0.45) {
+      cloudMass(r, -2.4, SKY_Y - 1.3, 1.2, 2.6, 4, 0.9, cm);
+      if (c > 0.25) cloudMass(r, 2.9, SKY_Y - 0.8, 0.9, 1.6, 3, 0.65, cm);
+    } else if (c >= 0.45) {
+      cloudMass(r, -1.8, SKY_Y - 1.4, 1.2, 4.2, 6, 1.2, cm);
+      cloudMass(r, 2.4, SKY_Y - 0.6, 0.8, 3.0, 4, 1.0, cm);
+      if (c > 0.7) cloudMass(r, 0.4, SKY_Y + 0.8, 1.6, 2.6, 3, 0.95, cm);
+    }
+
+    if (kind === 'rain' || kind === 'storm') {
+      for (let i = 0; i < 18; i++) {
+        const m = add(art, dropGeo, mat.drop, [-3.2 + r() * 6.4, 0, 0.6 + r() * 1.8], 1.2);
+        fallers.push([m, 4 + r() * 1.5, r()]);
       }
-      if (kind === 'storm') {
-        const sh = new THREE.Shape();
-        sh.moveTo(0.2, 0); sh.lineTo(-0.7, -1.4); sh.lineTo(-0.05, -1.4); sh.lineTo(-0.5, -2.8); sh.lineTo(0.9, -0.9); sh.lineTo(0.2, -0.9); sh.lineTo(0.7, 0);
-        const g = new THREE.ExtrudeGeometry(sh, { depth: 0.3, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.06, bevelSegments: 3 });
-        const bolt = add(art, g, mat.bolt, [0.1, 3.9, 1.9]);
-        floaters.push([bolt, 0.1, 3.9, 0, 0.05]);
+    }
+    if (kind === 'snow') {
+      for (let i = 0; i < 24; i++) {
+        const m = add(art, sphereGeo, mat.snow, [-3.4 + r() * 6.8, 0, 0.4 + r() * 2], 0.12 + r() * 0.06);
+        fallers.push([m, 1 + r() * 0.5, r()]);
       }
-      if (kind === 'fog') {
-        for (let i = 0; i < 3; i++) {
-          const g = new THREE.CapsuleGeometry(0.2, 5.4 - i * 1.3, 6, 16);
-          const m = add(art, g, mat.cloudLight, [0, 3.0 - i * 0.55, 1.8]);
-          m.rotation.z = Math.PI / 2;
-          floaters.push([m, 0, 3.0 - i * 0.55, i * 2, 0.35]);
-        }
+    }
+    if (kind === 'storm') {
+      const sh = new THREE.Shape();
+      sh.moveTo(0.2, 0); sh.lineTo(-0.7, -1.4); sh.lineTo(-0.05, -1.4); sh.lineTo(-0.5, -2.8); sh.lineTo(0.9, -0.9); sh.lineTo(0.2, -0.9); sh.lineTo(0.7, 0);
+      const g = new THREE.ExtrudeGeometry(sh, { depth: 0.3, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.06, bevelSegments: 1 });
+      const bolt = add(art, g, mat.bolt, [0.3, SKY_Y - 1.6, 2.2]);
+      floaters.push([bolt, 0.3, SKY_Y - 1.6, 0, 0.05]);
+    }
+    if (kind === 'fog') {
+      for (let i = 0; i < 3; i++) {
+        const g = new THREE.CapsuleGeometry(0.22, 5.4 - i * 1.3, 6, 16);
+        const m = add(art, g, mat.cloudLight, [0, SKY_Y - 2.2 - i * 0.6, 2]);
+        m.rotation.z = Math.PI / 2;
+        floaters.push([m, 0, SKY_Y - 2.2 - i * 0.6, i * 2, 0.35]);
       }
     }
   }
@@ -242,30 +246,29 @@ export function createWeather3D(container, { onTap } = {}) {
     if (text !== t) return;
     clearGroup(digits);
     const shapes = textShapes(font, t, 1);
+    // one flat bevel segment = crisp 45° chamfers on every edge
     const geo = new THREE.ExtrudeGeometry(shapes, {
-      depth: 0.16, curveSegments: 10, bevelEnabled: true, bevelThickness: 0.06, bevelSize: 0.034, bevelSegments: 4,
+      depth: 0.2, curveSegments: 10, bevelEnabled: true, bevelThickness: 0.05, bevelSize: 0.045, bevelSegments: 1,
     });
     geo.computeBoundingBox();
     const bb = geo.boundingBox;
-    const h = bb.max.y - bb.min.y;
-    const s = 5.9 / h; // digits always stand 5.9 units tall
+    const s = (DIGIT_TOP + 4.2) / (bb.max.y - bb.min.y);
     geo.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2);
     const m = new THREE.Mesh(geo, mat.digit);
-    m.scale.set(s * 0.94, s, 1.5 / 0.28); // tall and narrow, ~1.5 units thick
-    m.position.y = -3.35;
+    m.scale.set(s * 0.62, s, 1.4 / 0.3); // tall, narrow, ~1.4 units deep
+    m.position.y = -4.2;
     m.castShadow = true;
-    m.receiveShadow = true;
     digits.add(m);
   }
 
   function setNight(night) {
-    hemi.intensity = night ? 0.9 : 1.7;
-    hemi.groundColor.set(night ? 0x202020 : 0xe4e4e4);
-    key.intensity = night ? 1.3 : 1.9;
-    fill.intensity = night ? 0.45 : 0.75;
-    ground.material.opacity = night ? 0.3 : 0.09;
-    mat.digit.color.set(night ? 0x3a3a3a : 0x2c2c2c);
-    mat.cloud.color.set(night ? 0x3a3a3a : 0x2a2a2a);
+    hemi.intensity = night ? 1.1 : 1.6;
+    hemi.groundColor.set(night ? 0x1a1a1a : 0xdedede);
+    key.intensity = night ? 1.3 : 2.0;
+    fill.intensity = night ? 0.4 : 0.7;
+    wall.material.opacity = night ? 0.3 : 0.11;
+    mat.digit.color.set(night ? 0x4a4a4a : 0x171717);
+    mat.cloud.color.set(night ? 0x3a3a3a : 0x232323);
   }
 
   // ----- size -----
@@ -276,13 +279,13 @@ export function createWeather3D(container, { onTap } = {}) {
     canvas.style.width = `${w}px`;
     canvas.style.height = `${hgt}px`;
     camera.aspect = w / hgt;
-    // fit a 10×13 box (art + numerals) into the view
+    // fit the 9.6 × 14.6 column (sky + numerals) into the view
     const vFov = THREE.MathUtils.degToRad(camera.fov);
-    const distH = 6.5 / Math.tan(vFov / 2);
-    const distW = 5.0 / (Math.tan(vFov / 2) * camera.aspect);
-    const d = Math.max(distH, distW) * 1.04;
-    camera.position.set(0, 3.2, d);
-    camera.lookAt(0, 3.05, 0);
+    const distH = 7.3 / Math.tan(vFov / 2);
+    const distW = 4.8 / (Math.tan(vFov / 2) * camera.aspect);
+    const d = Math.max(distH, distW) * 1.02;
+    camera.position.set(0, 3.1, d);
+    camera.lookAt(0, 3.0, 0);
     camera.updateProjectionMatrix();
   }
   const ro = new ResizeObserver(resize);
@@ -333,19 +336,18 @@ export function createWeather3D(container, { onTap } = {}) {
         rotX += (0 - rotX) * 0.08;
       }
     }
-    spin.rotation.y = rotY + Math.sin(t * 0.6) * 0.06;
+    spin.rotation.y = rotY + Math.sin(t * 0.5) * 0.05;
     spin.rotation.x = rotX;
     for (const [o, x, y, ph, drift] of floaters) {
-      o.position.y = y + Math.sin(t * 0.9 + ph) * 0.09;
-      o.position.x = x + Math.sin(t * 0.35 + ph) * drift;
+      o.position.y = y + Math.sin(t * 0.8 + ph) * 0.08;
+      o.position.x = x + Math.sin(t * 0.3 + ph) * drift;
     }
     for (const [m, ph] of twinklers) m.scale.setScalar(0.07 * (0.6 + 0.4 * Math.sin(t * 2.4 + ph)));
-    if (breather) breather[0].scale.setScalar(breather[1] * (1 + Math.sin(t * 1.1) * 0.012));
     for (const f of fallers) {
-      const [m, , , speed] = f;
-      f[4] = (f[4] + dt * speed / 4) % 1;
-      m.position.y = 3.6 - f[4] * 4.2;
-      m.visible = f[4] < 0.92;
+      const [m, speed] = f;
+      f[2] = (f[2] + dt * speed / 4) % 1;
+      m.position.y = SKY_Y - 2 - f[2] * 5;
+      m.visible = f[2] < 0.9;
     }
     if (flash > 0) {
       flash = Math.max(0, flash - dt * 2.2);
@@ -358,14 +360,15 @@ export function createWeather3D(container, { onTap } = {}) {
   raf = requestAnimationFrame(frame);
 
   return {
-    setScene(kind, isDay) { buildArt(kind, isDay); setNight(!isDay); },
+    setScene(kind, isDay, cover = 50, seed = 1) { buildArt(kind, isDay, cover, seed); setNight(!isDay); },
     setText,
     destroy() {
       cancelAnimationFrame(raf);
       ro.disconnect();
       clearGroup(art); clearGroup(digits);
       Object.values(mat).forEach((m) => m.dispose());
-      sphereGeo.dispose(); arcGeo.dispose(); dropGeo.dispose(); grain.dispose();
+      shared.forEach((g) => g.dispose());
+      grain.dispose();
       renderer.dispose();
       canvas.remove();
     },
