@@ -1,6 +1,6 @@
-// Offline support: always try the network first so updates show up right away,
+// Offline support: try the network first so updates show up right away,
 // and fall back to the cache only when offline.
-const VERSION = 'quint-v4';
+const VERSION = 'quint-v5';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/main.js', 'js/ui.js', 'js/calculator.js', 'js/weather.js', 'js/timer.js',
@@ -10,9 +10,10 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  // cache: 'reload' skips the HTTP cache so a new version never stores stale files
+  // cache: 'reload' skips the HTTP cache so a new version never stores stale files.
+  // A failed precache must not block the update, so errors are swallowed.
   e.waitUntil(caches.open(VERSION)
-    .then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' }))))
+    .then((c) => Promise.all(SHELL.map((u) => c.add(new Request(u, { cache: 'reload' })).catch(() => {}))))
     .then(() => self.skipWaiting()));
 });
 
@@ -22,27 +23,38 @@ self.addEventListener('activate', (e) => {
     .then(() => self.clients.claim()));
 });
 
+// Safari refuses to show a page whose service-worker response was redirected,
+// so redirected responses are copied into a fresh Response.
+function clean(res) {
+  if (!res.redirected) return res;
+  return res.blob().then((body) => new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers }));
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  // weather API: always live; the app keeps its own cache of the last response
-  if (url.hostname.endsWith('open-meteo.com')) return;
-
-  if (url.origin === location.origin) {
-    e.respondWith(fetch(req, { cache: 'no-cache' }).then((res) => {
-      if (res.ok) {
-        const copy = res.clone();
-        caches.open(VERSION).then((c) => c.put(req, copy));
-      }
+  if (url.origin !== location.origin) {
+    // weather and place APIs stay live; fonts are cached for offline use
+    if (!/fonts\.(googleapis|gstatic)\.com$/.test(url.hostname)) return;
+    e.respondWith(fetch(req).then((res) => {
+      const copy = res.clone();
+      caches.open(VERSION).then((c) => c.put(req, copy));
       return res;
-    }).catch(() => caches.match(req, { ignoreSearch: true })));
+    }).catch(() => caches.match(req)));
     return;
   }
-  // fonts and other cross-origin assets: network first, fall back to cache
+
   e.respondWith(fetch(req).then((res) => {
-    const copy = res.clone();
-    caches.open(VERSION).then((c) => c.put(req, copy));
-    return res;
-  }).catch(() => caches.match(req)));
+    if (res.ok && !res.redirected) {
+      const copy = res.clone();
+      caches.open(VERSION).then((c) => c.put(req, copy));
+    }
+    return clean(res);
+  }).catch(async () => {
+    const hit = await caches.match(req, { ignoreSearch: true });
+    if (hit) return hit;
+    if (req.mode === 'navigate') return (await caches.match('./')) || (await caches.match('index.html')) || Response.error();
+    return Response.error();
+  }));
 });

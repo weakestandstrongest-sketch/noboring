@@ -79,6 +79,12 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   let reloading = false;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (!hadController || reloading) return;
+    // never loop: at most one automatic reload every 30 seconds
+    try {
+      const last = +sessionStorage.getItem('quint.swReload') || 0;
+      if (Date.now() - last < 30000) return;
+      sessionStorage.setItem('quint.swReload', String(Date.now()));
+    } catch { return; }
     reloading = true;
     location.reload();
   });
