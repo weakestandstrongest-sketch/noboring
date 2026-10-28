@@ -29,12 +29,59 @@ const putPhoto = (p) => tx('readwrite', (s) => s.put(p));
 const delPhoto = (id) => tx('readwrite', (s) => s.delete(id));
 const allPhotos = () => tx('readonly', (s) => s.getAll()).then((x) => (x || []).sort((a, b) => b.id - a.id));
 
+// Each filter is a list of CSS filter steps. The preview uses them as a CSS filter
+// and the saved photo applies the very same steps to its pixels (iOS Safari ignores
+// ctx.filter on canvas, so it cannot be relied on), so both always match.
 const FILTERS = [
-  { key: 'A', label: 'AUTO', css: 'none' },
-  { key: 'M', label: 'MONO', css: 'grayscale(1) contrast(1.15)' },
-  { key: 'W', label: 'WARM', css: 'sepia(.25) saturate(1.15) contrast(1.05)' },
-  { key: 'F', label: 'FADE', css: 'contrast(.86) brightness(1.08) saturate(.8)' },
+  { key: 'A', label: 'AUTO', ops: [] },
+  { key: 'M', label: 'MONO', ops: [['grayscale', 1], ['contrast', 1.15]] },
+  { key: 'W', label: 'WARM', ops: [['sepia', 0.25], ['saturate', 1.15], ['contrast', 1.05]] },
+  { key: 'F', label: 'FADE', ops: [['contrast', 0.86], ['brightness', 1.08], ['saturate', 0.8]] },
 ];
+
+const opsToCss = (ops) => ops.map(([n, v]) => `${n}(${+v.toFixed(3)})`).join(' ') || 'none';
+
+// Colour matrices from the Filter Effects spec: [r, g, b, offset] per output channel.
+function opMatrix([name, v]) {
+  const i = 1 - v;
+  switch (name) {
+    case 'grayscale': return [
+      [0.2126 + 0.7874 * i, 0.7152 - 0.7152 * i, 0.0722 - 0.0722 * i, 0],
+      [0.2126 - 0.2126 * i, 0.7152 + 0.2848 * i, 0.0722 - 0.0722 * i, 0],
+      [0.2126 - 0.2126 * i, 0.7152 - 0.7152 * i, 0.0722 + 0.9278 * i, 0]];
+    case 'sepia': return [
+      [0.393 + 0.607 * i, 0.769 - 0.769 * i, 0.189 - 0.189 * i, 0],
+      [0.349 - 0.349 * i, 0.686 + 0.314 * i, 0.168 - 0.168 * i, 0],
+      [0.272 - 0.272 * i, 0.534 - 0.534 * i, 0.131 + 0.869 * i, 0]];
+    case 'saturate': return [
+      [0.213 + 0.787 * v, 0.715 - 0.715 * v, 0.072 - 0.072 * v, 0],
+      [0.213 - 0.213 * v, 0.715 + 0.285 * v, 0.072 - 0.072 * v, 0],
+      [0.213 - 0.213 * v, 0.715 - 0.715 * v, 0.072 + 0.928 * v, 0]];
+    case 'brightness': return [[v, 0, 0, 0], [0, v, 0, 0], [0, 0, v, 0]];
+    case 'contrast': { const o = (0.5 - 0.5 * v) * 255; return [[v, 0, 0, o], [0, v, 0, o], [0, 0, v, o]]; }
+    default: return [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]];
+  }
+}
+
+// Apply the steps to canvas pixels in order, clamping after each step like CSS does.
+export function applyOps(ctx, w, h, ops) {
+  if (!ops.length) return;
+  const ms = ops.map(opMatrix).map((m) => m.flat());
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  const clamp = (x) => (x < 0 ? 0 : x > 255 ? 255 : x);
+  for (let p = 0; p < d.length; p += 4) {
+    let r = d[p], g = d[p + 1], b = d[p + 2];
+    for (const m of ms) {
+      const nr = clamp(m[0] * r + m[1] * g + m[2] * b + m[3]);
+      const ng = clamp(m[4] * r + m[5] * g + m[6] * b + m[7]);
+      const nb = clamp(m[8] * r + m[9] * g + m[10] * b + m[11]);
+      r = nr; g = ng; b = nb;
+    }
+    d[p] = r; d[p + 1] = g; d[p + 2] = b;
+  }
+  ctx.putImageData(img, 0, 0);
+}
 const EV_MIN = -2, EV_MAX = 2;
 // How the phone is held. ui: rotation for labels so they read upright; photo: rotation applied to the saved frame.
 const ORIENT = {
@@ -146,11 +193,13 @@ export default function camera() {
       zoomDrum));
 
   // ----- look: filter, exposure fallback, digital zoom -----
-  function cssFilter() {
-    const f = FILTERS[prefs.filter].css;
-    const ev = evCaps ? '' : `brightness(${Math.pow(2, prefs.ev * 0.5).toFixed(3)})`;
-    return [f === 'none' ? '' : f, ev].filter(Boolean).join(' ') || 'none';
+  // the current look: the selected filter, plus brightness when the camera has no exposure control
+  function lookOps() {
+    const ops = [...FILTERS[prefs.filter].ops];
+    if (!evCaps && prefs.ev) ops.push(['brightness', Math.pow(2, prefs.ev * 0.5)]);
+    return ops;
   }
+  const cssFilter = () => opsToCss(lookOps());
   function applyLook() {
     el.style.setProperty('--rot', `${ORIENT[prefs.orient].ui}deg`);
     letter.textContent = FILTERS[prefs.filter].key;
@@ -273,15 +322,18 @@ export default function camera() {
     const deg = hgt > w ? ORIENT[prefs.orient].photo : 0;
     const c = document.createElement('canvas');
     c.width = deg ? hgt : w; c.height = deg ? w : hgt;
-    const ctx = c.getContext('2d');
-    ctx.filter = cssFilter();
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    const ops = lookOps(); // read the selection now, at the moment of the shot
     ctx.translate(c.width / 2, c.height / 2);
     ctx.rotate((deg * Math.PI) / 180);
     if (prefs.facing === 'user') ctx.scale(-1, 1);
     const sw = w / digital, sh = hgt / digital;
     ctx.drawImage(video, (w - sw) / 2, (hgt - sh) / 2, sw, sh, -w / 2, -hgt / 2, w, hgt);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
     try {
+      await new Promise((r) => setTimeout(r, 30)); // let the flash paint before the pixel work
+      applyOps(ctx, c.width, c.height, ops);
       const blob = await new Promise((r, j) => c.toBlob((b) => (b ? r(b) : j(new Error('toBlob'))), 'image/jpeg', 0.92));
       await putPhoto({ id: Date.now(), blob, w: c.width, h: c.height });
       setThumb(blob);
