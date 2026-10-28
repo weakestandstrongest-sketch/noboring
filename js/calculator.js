@@ -84,7 +84,8 @@ export default function calculator() {
     // shrink to fit: big numbers get smaller
     const len = text.length;
     const base = Math.min(window.innerWidth * 0.36, 168);
-    result.firstElementChild.style.fontSize = `${Math.max(48, base * Math.min(1, 5.2 / Math.max(len, 1)))}px`;
+    const fs = `${Math.round(Math.max(48, base * Math.min(1, 5.2 / Math.max(len, 1))))}px`;
+    if (result.firstElementChild.style.fontSize !== fs) result.firstElementChild.style.fontSize = fs;
     store.set('calc.expr', expr);
   }
 

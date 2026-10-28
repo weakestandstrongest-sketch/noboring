@@ -36,6 +36,12 @@ const FILTERS = [
   { key: 'F', label: 'FADE', css: 'contrast(.86) brightness(1.08) saturate(.8)' },
 ];
 const EV_MIN = -2, EV_MAX = 2;
+// How the phone is held. ui: rotation for labels so they read upright; photo: rotation applied to the saved frame.
+const ORIENT = {
+  left: { label: '横（上を左）', ui: 90, photo: -90 },
+  right: { label: '横（上を右）', ui: -90, photo: 90 },
+  portrait: { label: '縦', ui: 0, photo: 0 },
+};
 const MAX_ZOOM = 10;
 
 function cameraErrorText(err) {
@@ -89,7 +95,7 @@ function drum({ vertical = false, pitch = 14, onStep, label }) {
 }
 
 export default function camera() {
-  const prefs = Object.assign({ facing: 'environment', filter: 0, grid: true, timer: 0, ev: 0 }, store.get('camera.prefs', {}));
+  const prefs = Object.assign({ facing: 'environment', filter: 0, grid: true, timer: 0, ev: 0, orient: 'left' }, store.get('camera.prefs', {}));
   const savePrefs = () => store.set('camera.prefs', prefs);
   let stream = null, track = null, alive = true, startSeq = 0;
   let zoomCaps = null, zoom = 1, evCaps = null, torchOn = false;
@@ -146,6 +152,7 @@ export default function camera() {
     return [f === 'none' ? '' : f, ev].filter(Boolean).join(' ') || 'none';
   }
   function applyLook() {
+    el.style.setProperty('--rot', `${ORIENT[prefs.orient].ui}deg`);
     letter.textContent = FILTERS[prefs.filter].key;
     video.style.filter = cssFilter();
     const digital = zoomCaps ? 1 : zoom;
@@ -262,17 +269,21 @@ export default function camera() {
     }
     const w = video.videoWidth, hgt = video.videoHeight;
     const digital = zoomCaps ? 1 : zoom;
+    // held sideways with the screen locked upright: turn the portrait frame into a landscape photo
+    const deg = hgt > w ? ORIENT[prefs.orient].photo : 0;
     const c = document.createElement('canvas');
-    c.width = w; c.height = hgt;
+    c.width = deg ? hgt : w; c.height = deg ? w : hgt;
     const ctx = c.getContext('2d');
     ctx.filter = cssFilter();
-    if (prefs.facing === 'user') { ctx.translate(w, 0); ctx.scale(-1, 1); }
+    ctx.translate(c.width / 2, c.height / 2);
+    ctx.rotate((deg * Math.PI) / 180);
+    if (prefs.facing === 'user') ctx.scale(-1, 1);
     const sw = w / digital, sh = hgt / digital;
-    ctx.drawImage(video, (w - sw) / 2, (hgt - sh) / 2, sw, sh, 0, 0, w, hgt);
+    ctx.drawImage(video, (w - sw) / 2, (hgt - sh) / 2, sw, sh, -w / 2, -hgt / 2, w, hgt);
     flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go');
     try {
       const blob = await new Promise((r, j) => c.toBlob((b) => (b ? r(b) : j(new Error('toBlob'))), 'image/jpeg', 0.92));
-      await putPhoto({ id: Date.now(), blob, w, h: hgt });
+      await putPhoto({ id: Date.now(), blob, w: c.width, h: c.height });
       setThumb(blob);
     } catch {
       toast('写真を保存できませんでした');
@@ -343,6 +354,9 @@ export default function camera() {
       }, t ? `${t}秒` : 'オフ')));
       const caps = track?.getCapabilities?.() || {};
       p.append(h('h3', {}, 'カメラ'),
+        h('div', { class: 'row' }, h('span', {}, '持ち方'), h('div', { class: 'seg' }, Object.entries(ORIENT).map(([k, o]) => h('button', {
+          class: prefs.orient === k ? 'on' : '', onclick: () => { prefs.orient = k; savePrefs(); applyLook(); close(); },
+        }, o.label)))),
         h('div', { class: 'row' }, h('span', {}, 'セルフタイマー'), timerSeg),
         h('button', { class: 'btn', onclick: () => { prefs.grid = !prefs.grid; savePrefs(); applyLook(); close(); } }, `グリッド: ${prefs.grid ? 'オン' : 'オフ'}`),
         caps.torch && h('button', { class: 'btn', onclick: async () => {

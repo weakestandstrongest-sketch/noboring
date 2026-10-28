@@ -174,13 +174,19 @@ body[data-tone="light"] .tabbar {
   text-shadow: 1px -1px 0 #666, -1px 1px 0 #0a0a0a, -2px 2px 0 #0b0b0b, -3px 3px 0 #0c0c0c, -4px 4px 0 #0d0d0d, -5px 5px 0 #0e0e0e, -6px 6px 0 #0f0f0f, -16px 22px 28px rgba(0,0,0,.6);
 }
 
-/* the white "pop" when a number is tapped */
-.pop { animation: pop .55s cubic-bezier(.2, .8, .2, 1); }
-@keyframes pop {
-  0% { filter: none; transform: scale(1); }
-  14% { filter: brightness(5) drop-shadow(0 0 24px rgba(255,255,255,.9)); transform: scale(1.035); }
-  100% { filter: none; transform: scale(1); }
+/* the white "pop" when a number is tapped: a white copy fades over the numeral.
+   Only opacity and transform animate, so it stays smooth on iPhone. */
+.emboss::after {
+  content: attr(data-t);
+  position: absolute; inset: 0; padding: .16em 0;
+  color: #fff; opacity: 0; pointer-events: none;
+  text-shadow: 0 0 .12em rgba(255,255,255,.85);
+  will-change: opacity;
 }
+.emboss.pop { animation: pop-scale .5s cubic-bezier(.2, .8, .2, 1); will-change: transform; }
+.emboss.pop::after { animation: pop-glow .6s cubic-bezier(.2, .8, .3, 1); }
+@keyframes pop-scale { 0% { transform: scale(1); } 16% { transform: scale(1.03); } 100% { transform: scale(1); } }
+@keyframes pop-glow { 0% { opacity: 0; } 12% { opacity: 1; } 100% { opacity: 0; } }
 
 /* ---------- sheet / modal ---------- */
 .sheet-backdrop {
@@ -288,7 +294,7 @@ body[data-tone="light"] .tabbar {
   transition: color .3s;
 }
 .timer-read.idle { color: #5a5a5a; }
-.timer-done .timer-num .emboss { animation: pop .9s infinite; }
+.timer-done .timer-num .emboss::after { animation: pop-glow .9s infinite; }
 
 /* ---------- weather ---------- */
 .weather { color: #111; transition: color .5s; }
@@ -296,11 +302,14 @@ body[data-tone="light"] .tabbar {
 .wx-place { display: flex; align-items: center; gap: 6px; font-size: 21px !important; font-weight: 800; }
 .wx-place svg { width: 18px; height: 18px; flex: none; }
 .wx-main { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; position: relative; }
-.wx-art { width: 100%; flex: 0 0 30%; position: relative; min-height: 0; }
+.wx-3d { flex: 1; min-height: 0; width: 100%; position: relative; }
+.wx-3d canvas { position: absolute; inset: 0; display: block; }
+.wx-3d.flat { display: flex; flex-direction: column; }
+.wx-art { width: 100%; flex: 0 0 45%; position: relative; min-height: 0; }
 .wx-art svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .wx-temp { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
 .wx-temp .emboss { font-size: min(62vw, 33vh); transform: scaleY(1.12); }
-.wx-cond { font-size: 32px; font-weight: 800; letter-spacing: .02em; margin: 4px 0 64px; text-align: center; min-height: 40px; }
+.wx-cond { font-size: 32px; font-weight: 800; letter-spacing: .02em; margin: 0 0 64px; text-align: center; min-height: 40px; }
 .wx-scrub { position: relative; width: 100%; padding: 0 12px 0 22px; }
 .wx-row { display: flex; align-items: center; gap: 6px; }
 .wx-track {
@@ -443,7 +452,7 @@ body[data-tone="light"] .tabbar {
 @keyframes camflash { from { opacity: .9; } to { opacity: 0; } }
 .cam-msg { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: var(--ink-dim); padding: 30px; line-height: 1.7; font-size: 14px; white-space: pre-line; }
 .cam-msg button { margin-top: 12px; padding: 10px 18px; border-radius: 18px; background: #333; color: #eee; }
-.cam-badge { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,.5); padding: 5px 12px; border-radius: 14px; font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: #eee; opacity: 0; transition: opacity .3s; pointer-events: none; }
+.cam-badge { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,.5); padding: 5px 12px; border-radius: 14px; font-family: var(--mono); font-size: 11px; letter-spacing: .12em; color: #eee; opacity: 0; transition: opacity .3s; pointer-events: none; }
 .cam-badge.show { opacity: 1; }
 .cam-count { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--num-font); font-weight: 900; font-size: 140px; color: #fff; text-shadow: 0 6px 30px rgba(0,0,0,.6); pointer-events: none; }
 .cam-bottom { flex: none; display: grid; grid-template-columns: 74px 1fr 70px; gap: 14px; height: 168px; }
@@ -470,3 +479,11 @@ body[data-tone="light"] .tabbar {
 .photo-view .bar button { padding: 10px 18px; border-radius: 20px; background: #222; font-size: 15px; color: #eee; }
 .cam-gallery { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin: 0 -10px; }
 .cam-gallery button { aspect-ratio: 3/4; background: #222 center/cover; border-radius: 6px; }
+
+/* labels turn to stay upright when the phone is held sideways */
+.camera { --rot: 90deg; }
+.camera .knob > svg, .camera .knob .letter, .camera .drum .lbl, .lens .reel span, .cam-badge, .cam-count, .cam-msg, .cam-thumb {
+  transition: rotate .45s cubic-bezier(.34, 1.45, .5, 1), opacity .3s;
+  rotate: var(--rot);
+}
+.cam-msg { inset: auto; left: 50%; top: 50%; width: 300px; translate: -50% -50%; }

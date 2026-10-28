@@ -1,9 +1,10 @@
 // Offline support: app shell is cache-first, everything else network-first.
-const VERSION = 'quint-v2';
+const VERSION = 'quint-v3';
 const SHELL = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/main.js', 'js/ui.js', 'js/calculator.js', 'js/weather.js', 'js/timer.js',
-  'js/habits.js', 'js/journey.js', 'js/camera.js',
+  'js/habits.js', 'js/journey.js', 'js/camera.js', 'js/wx3d.js',
+  'vendor/three.module.min.js', 'vendor/digits.typeface.json',
   'icons/icon.svg', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 

@@ -1,4 +1,5 @@
 import { h, emboss, setEmboss, iconBtn, icons, topbar, sheet, store, toast, tick, pop } from './ui.js';
+import { createWeather3D } from './wx3d.js';
 
 // WMO weather codes → [label, kind]
 const CODES = {
@@ -189,7 +190,7 @@ export default function weather({ setTone }) {
   }
 
   // hero pieces, rebuilt by build() and updated by show()
-  let artBox, tempNum, condEl, scrub, cursor, bubble, track, shownKey = '';
+  let hero = null, artBox, tempNum, condEl, scrub, cursor, bubble, track, shownKey = '';
 
   function build(d) {
     data = d;
@@ -202,9 +203,19 @@ export default function weather({ setTone }) {
     // hour 0 is "now": use the current conditions
     if (hours[0]) Object.assign(hours[0], { t: c.temperature_2m, code: c.weather_code, day: !!c.is_day });
 
-    artBox = h('div', { class: 'wx-art' });
-    tempNum = emboss('0', { variant: 'ink' });
-    tempNum.addEventListener('click', () => { pop(tempNum.firstElementChild); tick(); });
+    // 3D scene you can spin; flat SVG + CSS numerals if WebGL is unavailable
+    hero?.destroy();
+    hero = null;
+    const stage3d = h('div', { class: 'wx-3d' });
+    try {
+      hero = createWeather3D(stage3d, { onTap: () => tick() });
+    } catch {
+      artBox = h('div', { class: 'wx-art' });
+      tempNum = emboss('0', { variant: 'ink' });
+      tempNum.addEventListener('click', () => { pop(tempNum.firstElementChild); tick(); });
+      stage3d.classList.add('flat');
+      stage3d.append(artBox, h('div', { class: 'wx-temp' }, tempNum));
+    }
     condEl = h('div', { class: 'wx-cond' });
 
     // timeline bar
@@ -237,7 +248,7 @@ export default function weather({ setTone }) {
       labels);
     bindScrub();
 
-    main.replaceChildren(artBox, h('div', { class: 'wx-temp' }, tempNum), condEl, scrub);
+    main.replaceChildren(stage3d, condEl, scrub);
     shownKey = '';
     show(null);
   }
@@ -253,10 +264,14 @@ export default function weather({ setTone }) {
     const key = `${kind}${night}`;
     if (key !== shownKey) {
       shownKey = key;
-      artBox.innerHTML = artSVG(kind, x.day);
-      artBox.classList.remove('wx-swap'); void artBox.offsetWidth; artBox.classList.add('wx-swap');
+      if (hero) hero.setScene(kind, x.day);
+      else {
+        artBox.innerHTML = artSVG(kind, x.day);
+        artBox.classList.remove('wx-swap'); void artBox.offsetWidth; artBox.classList.add('wx-swap');
+      }
     }
-    setEmboss(tempNum, String(Math.round(x.t)));
+    if (hero) hero.setText(String(Math.round(x.t)));
+    else setEmboss(tempNum, String(Math.round(x.t)));
     condEl.textContent = label;
     // shade the bar: daylight hours darker on a light screen, lighter on a dark one
     track.style.background = night ? '#2c2c2c' : '#f1f1ef';
@@ -374,5 +389,5 @@ export default function weather({ setTone }) {
 
   let alive = true;
   load();
-  return { el, destroy: () => { alive = false; } };
+  return { el, destroy: () => { alive = false; hero?.destroy(); } };
 }
