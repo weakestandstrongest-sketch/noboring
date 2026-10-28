@@ -1,5 +1,4 @@
 import { h, emboss, setEmboss, iconBtn, icons, topbar, sheet, store, toast, tick, pop } from './ui.js';
-import { createWeather3D } from './wx3d.js';
 
 // WMO weather codes → [label, kind]
 const CODES = {
@@ -192,7 +191,12 @@ export default function weather({ setTone }) {
   // hero pieces, rebuilt by build() and updated by show()
   let hero = null, artBox, tempNum, condEl, scrub, cursor, bubble, track, shownKey = '';
 
-  function build(d) {
+  // the 3D scene loads on demand; if it cannot load, the flat version is used
+  const wx3d = import('./wx3d.js').catch(() => null);
+
+  async function build(d) {
+    const mod = await wx3d;
+    if (!alive) return;
     data = d;
     const c = d.current;
     const start = Math.max(0, d.hourly.time.findIndex((x) => x >= c.time.slice(0, 13)));
@@ -208,7 +212,8 @@ export default function weather({ setTone }) {
     hero = null;
     const stage3d = h('div', { class: 'wx-3d' });
     try {
-      hero = createWeather3D(stage3d, { onTap: () => tick() });
+      if (!mod) throw new Error('3D unavailable');
+      hero = mod.createWeather3D(stage3d, { onTap: () => tick() });
     } catch {
       artBox = h('div', { class: 'wx-art' });
       tempNum = emboss('0', { variant: 'ink' });

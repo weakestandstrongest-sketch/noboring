@@ -1,9 +1,4 @@
 import { h, store } from './ui.js';
-import calculator from './calculator.js';
-import weather from './weather.js';
-import timer from './timer.js';
-import habits from './habits.js';
-import camera from './camera.js';
 
 // Lucide-style line icons (24×24, stroked).
 const I = {
@@ -15,11 +10,11 @@ const I = {
 };
 
 const APPS = [
-  { id: 'calculator', label: '電卓', mod: calculator },
-  { id: 'weather', label: '天気', mod: weather },
-  { id: 'timer', label: 'タイマー', mod: timer },
-  { id: 'habits', label: '習慣', mod: habits },
-  { id: 'camera', label: 'カメラ', mod: camera },
+  { id: 'calculator', label: '電卓', load: () => import('./calculator.js') },
+  { id: 'weather', label: '天気', load: () => import('./weather.js') },
+  { id: 'timer', label: 'タイマー', load: () => import('./timer.js') },
+  { id: 'habits', label: '習慣', load: () => import('./habits.js') },
+  { id: 'camera', label: 'カメラ', load: () => import('./camera.js') },
 ];
 
 const root = document.getElementById('app');
@@ -53,7 +48,9 @@ export function setTone(tone) {
   document.body.dataset.tone = tone;
 }
 
-function render() {
+let renderSeq = 0;
+async function render() {
+  const seq = ++renderSeq;
   let id = location.hash.slice(1);
   let index = APPS.findIndex((a) => a.id === id);
   if (index < 0) {
@@ -61,12 +58,20 @@ function render() {
     index = Math.max(0, APPS.findIndex((a) => a.id === id));
     history.replaceState(null, '', `#${APPS[index].id}`);
   }
+  setActive(index);
+  // each screen is its own module, so one that fails to load cannot take down the others
+  let mod;
+  try {
+    mod = (await APPS[index].load()).default;
+  } catch {
+    mod = null;
+  }
+  if (seq !== renderSeq) return;
   if (current?.destroy) current.destroy();
   root.querySelectorAll('.sheet-backdrop, .photo-view').forEach((n) => n.remove());
   setTone('dark');
-  current = APPS[index].mod({ setTone });
+  current = mod ? mod({ setTone }) : { el: h('div', { class: 'screen' }, h('div', { class: 'wx-msg' }, '読み込めませんでした。\n通信状況を確認して開き直してください。')) };
   stage.replaceChildren(current.el);
-  setActive(index);
   store.set('lastApp', APPS[index].id);
 }
 
