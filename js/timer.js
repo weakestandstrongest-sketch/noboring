@@ -11,17 +11,20 @@ export default function timer() {
 
   const stage = h('div', { class: 'timer-stage' });
   const reel = h('div', { class: 'timer-reel' });
-  const SLOTS = [-2, -1, 0, 1, 2];
-  const slots = SLOTS.map(() => {
+  // Five numerals on a loop. Each keeps its own value; one that rolls off the top
+  // or bottom is moved to the other end and only then relabelled, so the digits
+  // on screen are never rewritten while they move (Safari leaves ghosts of
+  // restyled 3D text inside a moving layer).
+  const slots = [-2, -1, 0, 1, 2].map(() => {
     const num = emboss('00');
     const slot = h('div', { class: 'timer-num' }, num);
     reel.append(slot);
-    return { slot, num };
+    return { slot, num, v: null };
   });
   const read = h('div', { class: 'timer-read' });
   const hand = h('div', { class: 'timer-hand' }, h('i'));
   stage.append(hand, reel, read);
-  const center = slots[2].num.firstElementChild;
+  let center = slots[2]; // the slot showing the countdown once started
 
   // The reel position is a continuous number of minutes: dragging moves it freely,
   // a flick keeps it spinning with friction, and it always comes to rest on a whole minute.
@@ -33,9 +36,26 @@ export default function timer() {
   let step = 300;           // px between numbers
 
   function measure() {
-    const fs = parseFloat(getComputedStyle(slots[0].slot).fontSize) || 300;
+    const fs = parseFloat(getComputedStyle(slots[0].slot).fontSize);
+    if (!fs) return false;
     step = fs * 0.8 * 1.24 + fs * 0.16;
+    return true;
   }
+
+  // give the slots consecutive values around `at` (larger numbers above)
+  function seat(at) {
+    const b = Math.round(at);
+    slots.forEach((sl, k) => setValue(sl, b + 2 - k));
+  }
+  function setValue(sl, v) {
+    if (sl.v === v) return;
+    sl.v = v;
+    setEmboss(sl.num, pad(clamp(v, 0, 99)));
+  }
+  const place = (sl, y, show) => {
+    sl.slot.style.transform = `translateY(calc(-50% + ${y.toFixed(1)}px))`;
+    sl.slot.style.visibility = show ? 'visible' : 'hidden';
+  };
 
   const msLeft = () => (st.mode === 'running' ? Math.max(0, st.endAt - Date.now()) : st.mode === 'paused' ? st.remaining : 0);
 
@@ -45,23 +65,32 @@ export default function timer() {
     return s < 60 ? s : Math.ceil(s / 60);
   }
 
+  let wasCounting = null;
+  const nearest = () => slots.reduce((a, b) => (Math.abs(b.v - pos) < Math.abs(a.v - pos) ? b : a));
   function paint() {
     const counting = st.mode !== 'idle' && !dragging && !moving();
-    const at = counting ? shownMinutes() : pos;
-    const base = Math.round(at);
-    const frac = counting ? 0 : at - base;
-    slots.forEach(({ slot, num }, k) => {
-      const o = SLOTS[k];
-      const v = base - o;                         // larger numbers sit above
-      const y = (o + frac) * step;
-      slot.style.transform = `translate3d(0, calc(-50% + ${y.toFixed(1)}px), 0)`;
-      slot.style.visibility = (counting ? o === 0 : v >= 1 && v <= MAX) ? 'visible' : 'hidden';
-      setEmboss(num, pad(clamp(v, 0, 99)));
-    });
+    if (counting) {
+      // one numeral in the middle shows the minutes (or seconds) left
+      if (wasCounting !== true) {
+        center.num.firstElementChild.classList.remove('white');
+        center = nearest();
+      }
+      setValue(center, shownMinutes());
+      for (const sl of slots) place(sl, 0, sl === center);
+    } else {
+      if (wasCounting !== false) seat(pos);
+      for (const sl of slots) {
+        // wrap round: a numeral that rolled past one end goes to the other
+        while (sl.v - pos > 2.5) setValue(sl, sl.v - 5);
+        while (pos - sl.v > 2.5) setValue(sl, sl.v + 5);
+        place(sl, (pos - sl.v) * step, sl.v >= 1 && sl.v <= MAX);
+      }
+    }
+    wasCounting = counting;
     // once started: white numerals, a sweeping second hand and mm:ss at the bottom
     const ms = msLeft();
     const s = Math.ceil(ms / 1000);
-    center.classList.toggle('white', counting && (st.mode === 'running' || st.mode === 'done'));
+    center.num.firstElementChild.classList.toggle('white', counting && (st.mode === 'running' || st.mode === 'done'));
     read.textContent = counting ? `${pad(Math.floor(s / 60))}:${pad(s % 60)}` : '';
     read.classList.toggle('idle', st.mode === 'paused');
     hand.classList.toggle('on', counting);
@@ -103,7 +132,7 @@ export default function timer() {
       const left = st.endAt - Date.now();
       const sec = Math.ceil(left / 1000);
       if (sec !== lastSec) { lastSec = sec; if (sec <= 5 && sec > 0) tick(1200, 0.03, 0.06); }
-      if (left <= 0) { st.mode = 'done'; save(); pop(center); }
+      if (left <= 0) { st.mode = 'done'; save(); pop(center.num.firstElementChild); }
     }
     if (st.mode === 'done') ring();
     paint();
@@ -141,8 +170,9 @@ export default function timer() {
     st.endAt = Date.now() + st.total;
     st.mode = 'running';
     save();
+    center = nearest(); // the numeral under the finger becomes the countdown
     tick(700, 0.05);
-    pop(center);
+    pop(center.num.firstElementChild);
   }
 
   function tap() {
@@ -151,7 +181,7 @@ export default function timer() {
     else if (st.mode === 'paused') { st.endAt = Date.now() + st.remaining; st.mode = 'running'; tick(700); }
     else { st.mode = 'idle'; pos = st.minutes; tick(600); }
     save();
-    pop(center);
+    pop(center.num.firstElementChild);
   }
 
   function reset() {
@@ -159,7 +189,7 @@ export default function timer() {
     st.total = 0;
     pos = st.minutes;
     save();
-    pop(center);
+    pop(center.num.firstElementChild);
     tick(600);
   }
 
@@ -237,7 +267,9 @@ export default function timer() {
     topbar({ right: [iconBtn('sliders', openSettings, '設定')] }),
     stage);
 
-  requestAnimationFrame(() => { measure(); raf = requestAnimationFrame(loop); });
+  // lay the reel out before the first paint so it doesn't jump into place
+  const ready = () => { if (!measure()) { requestAnimationFrame(ready); return; } paint(); raf = requestAnimationFrame(loop); };
+  requestAnimationFrame(ready);
   const onResize = () => measure();
   window.addEventListener('resize', onResize);
 
