@@ -1,4 +1,5 @@
 import { h, store } from './ui.js';
+import { playSplash } from './splash.js';
 
 // Lucide-style line icons (24×24, stroked).
 const I = {
@@ -76,6 +77,7 @@ async function render() {
 }
 
 window.addEventListener('hashchange', render);
+playSplash();
 render();
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
