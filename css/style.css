@@ -284,22 +284,26 @@ body[data-tone="light"] .tabbar {
 /* tall, narrow numerals like the reference */
 .timer-num .emboss-wrap { transform: scaleY(1.24); }
 .timer-num .emboss { letter-spacing: -.01em; }
+.timer-hand {
+  position: absolute; left: 50%; top: 46%; width: 9vh; height: 70vh; margin-left: -4.5vh; margin-top: -70vh;
+  transform-origin: 50% 100%;
+  pointer-events: none; opacity: 0; transition: opacity .4s;
+  filter: drop-shadow(-14px 20px 18px rgba(0,0,0,.7));
+}
+.timer-hand.on { opacity: 1; }
+.timer-hand i {
+  position: absolute; inset: 0;
+  background: linear-gradient(90deg, #d9d9d9, #fff 45%, #ececec 55%, #bdbdbd);
+  clip-path: polygon(50% 0, 64% 8%, 58% 100%, 42% 100%, 36% 8%);
+}
 .timer-read {
-  position: absolute; left: 0; right: 0; top: calc(46% + var(--tfs) * .5 + 14px); text-align: center;
-  font-family: var(--num-font); font-weight: 900; font-size: 34px; letter-spacing: .02em; color: #fff;
-  pointer-events: none; transition: opacity .3s;
+  position: absolute; left: 0; right: 0; bottom: 4%; text-align: center;
+  font-family: var(--num-font); font-weight: 900; font-size: 46px; letter-spacing: .02em; color: #fff;
+  pointer-events: none; transition: color .3s;
 }
-.timer-read.dim { opacity: .4; }
-/* tap to start: the numerals light up white plaster, hold, then settle back to dark */
-.emboss.lit::after { animation: tlit 1.5s cubic-bezier(.3, 0, .3, 1) both; }
-.emboss.lit-loop::after { animation: tlit-loop 1s ease-in-out infinite; }
-.emboss.lit::after, .emboss.lit-loop::after {
-  color: transparent; text-shadow: none;
-  background: linear-gradient(170deg, #ffffff 0%, #f4f4f4 45%, #e4e4e4 75%, #f2f2f2 100%);
-  -webkit-background-clip: text; background-clip: text;
-}
-@keyframes tlit { 0% { opacity: 0; } 8% { opacity: 1; } 55% { opacity: 1; } 100% { opacity: 0; } }
-@keyframes tlit-loop { 0%, 100% { opacity: .15; } 50% { opacity: 1; } }
+.timer-read.idle { color: #5a5a5a; }
+.timer .emboss.white { background: linear-gradient(170deg, #ffffff 0%, #f6f6f6 40%, #e9e9e9 70%, #f4f4f4 100%); -webkit-background-clip: text; background-clip: text; }
+.timer-done .timer-num .emboss::after { animation: pop-glow .9s infinite; }
 
 /* ---------- weather ---------- */
 .weather { color: #111; transition: color .5s; }
