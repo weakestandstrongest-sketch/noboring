@@ -13,6 +13,17 @@ const CODES = {
 };
 const code = (c) => CODES[c] || ['—', 'cloudy'];
 const WD = ['日', '月', '火', '水', '木', '金', '土'];
+// Moon phase 0..1 (0 = new, 0.5 = full) from a known new moon and the synodic month.
+export function moonPhase(date) {
+  const ref = Date.UTC(2000, 0, 6, 18, 14);
+  const days = (date.getTime() - ref) / 864e5;
+  return (((days / 29.530588853) % 1) + 1) % 1;
+}
+function moonName(p) {
+  const names = ['新月', '三日月', '上弦の月', '十三夜', '満月', '寝待月', '下弦の月', '有明月'];
+  return names[Math.round(p * 8) % 8];
+}
+
 const DEFAULT_PLACE = { name: '東京', lat: 35.6812, lon: 139.7671 };
 
 // ---------- art: glossy grainy spheres, like little sculptures ----------
@@ -279,7 +290,10 @@ export default function weather({ setTone }) {
         artBox.classList.remove('wx-swap'); void artBox.offsetWidth; artBox.classList.add('wx-swap');
       }
     }
-    if (hero) hero.setText(String(Math.round(x.t)));
+    if (hero) {
+      hero.setMoonPhase(moonPhase(new Date(x.time)));
+      hero.setText(String(Math.round(x.t)));
+    }
     else setEmboss(tempNum, String(Math.round(x.t)));
     condEl.textContent = label;
     // shade the bar: daylight hours darker on a light screen, lighter on a dark one
@@ -349,7 +363,8 @@ export default function weather({ setTone }) {
         stat('風速', `${Math.round(c.wind_speed_10m)}`, 'km/h'),
         stat('降水確率', `${d.daily.precipitation_probability_max?.[0] ?? 0}`, '%'),
         stat('日の出', hm(d.daily.sunrise?.[0])),
-        stat('日の入り', hm(d.daily.sunset?.[0]))));
+        stat('日の入り', hm(d.daily.sunset?.[0])),
+        stat('月', moonName(moonPhase(new Date())))));
     });
   }
 

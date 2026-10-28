@@ -115,8 +115,31 @@ export function createWeather3D(container, { onTap } = {}) {
 
   const mat = {
     sun: new THREE.MeshStandardMaterial({ color: 0xff1f2c, roughness: 0.75, bumpMap: grain, bumpScale: 0.5, emissive: 0x8a0410 }),
-    moon: new THREE.MeshStandardMaterial({ color: 0xf6f6f2, roughness: 0.9, bumpMap: grain, bumpScale: 0.5, emissive: 0x2a2a28 }),
-    moonShade: new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.38, depthWrite: false }),
+    // the moon is lit by its own "sun" so it can show the real phase
+    moonPhase: new THREE.ShaderMaterial({
+      uniforms: { sunDir: { value: new THREE.Vector3(0, 0, 1) }, grain: { value: grain } },
+      vertexShader: `
+        varying vec3 vN; varying vec2 vUv;
+        void main() {
+          vN = normalize(normalMatrix * normal);
+          vUv = uv;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }`,
+      fragmentShader: `
+        uniform vec3 sunDir; uniform sampler2D grain;
+        varying vec3 vN; varying vec2 vUv;
+        void main() {
+          float d = dot(normalize(vN), sunDir);
+          float lit = smoothstep(-0.06, 0.14, d);            // soft terminator
+          float g = texture2D(grain, vUv * vec2(6.0, 3.0)).r;
+          vec3 day = vec3(0.97, 0.97, 0.95) * (0.62 + 0.38 * clamp(d, 0.0, 1.0));
+          vec3 night = vec3(0.035, 0.035, 0.04);              // faint earthshine
+          vec3 col = mix(night, day, lit) * (0.9 + 0.16 * g);
+          col *= 0.82 + 0.18 * normalize(vN).z;               // gentle limb darkening
+          gl_FragColor = vec4(col, 1.0);
+          #include <colorspace_fragment>
+        }`,
+    }),
     cloud: new THREE.MeshStandardMaterial({ color: 0x232323, roughness: 0.8, bumpMap: grain, bumpScale: 0.45 }),
     cloudLight: new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.8, bumpMap: grain, bumpScale: 0.45 }),
     drop: new THREE.MeshStandardMaterial({ color: 0x3b8cff, roughness: 0.3, emissive: 0x0a2a66 }),
@@ -181,14 +204,9 @@ export function createWeather3D(container, { onTap } = {}) {
     const overcast = kind !== 'clear' && kind !== 'partly';
 
     // sun or moon, peeking out from behind the clouds
-    const body = add(art, sphereGeo, isDay ? mat.sun : mat.moon, [0, SKY_Y, -1.2], 2.75);
+    add(art, sphereGeo, isDay ? mat.sun : mat.moonPhase, [0, SKY_Y, 0.2], 2.6);
     glow.intensity = isDay ? (overcast ? 2 : 7) : 0;
-    if (!isDay) {
-      // dark side of the moon on the right
-      const shade = add(body, sphereGeo, mat.moonShade, [0.22, 0, 0.02], 1.01);
-      shade.castShadow = false;
-      shade.renderOrder = 1;
-      for (let i = 0; i < 10; i++) {
+    if (!isDay) {      for (let i = 0; i < 10; i++) {
         const st = add(art, sphereGeo, mat.star, [-4.5 + r() * 9, SKY_Y - 2 + r() * 5.5, -2.8], 0.07);
         st.castShadow = false;
         twinklers.push([st, r() * 6]);
@@ -198,26 +216,26 @@ export function createWeather3D(container, { onTap } = {}) {
     // clouds grow with cloud cover
     const c = Math.max(0, Math.min(1, cover / 100));
     if (overcast) {
-      cloudMass(r, -0.2, SKY_Y - 1.2, 0.6, 7.6, 9, 1.55, cm);
-      cloudMass(r, 0.6, SKY_Y + 0.3, -0.2, 4.2, 4, 1.4, cm);
+      cloudMass(r, -0.2, SKY_Y - 1.2, 2.0, 7.6, 9, 1.55, cm);
+      cloudMass(r, 0.6, SKY_Y + 0.3, 1.2, 4.2, 4, 1.4, cm);
     } else if (c > 0.12 && c < 0.45) {
-      cloudMass(r, -2.4, SKY_Y - 1.3, 1.2, 2.6, 4, 0.9, cm);
-      if (c > 0.25) cloudMass(r, 2.9, SKY_Y - 0.8, 0.9, 1.6, 3, 0.65, cm);
+      cloudMass(r, -2.4, SKY_Y - 1.3, 2.6, 2.6, 4, 0.9, cm);
+      if (c > 0.25) cloudMass(r, 2.9, SKY_Y - 0.8, 2.3, 1.6, 3, 0.65, cm);
     } else if (c >= 0.45) {
-      cloudMass(r, -1.8, SKY_Y - 1.4, 1.2, 4.2, 6, 1.2, cm);
-      cloudMass(r, 2.4, SKY_Y - 0.6, 0.8, 3.0, 4, 1.0, cm);
-      if (c > 0.7) cloudMass(r, 0.4, SKY_Y + 0.8, 1.6, 2.6, 3, 0.95, cm);
+      cloudMass(r, -1.8, SKY_Y - 1.4, 2.6, 4.2, 6, 1.2, cm);
+      cloudMass(r, 2.4, SKY_Y - 0.6, 2.2, 3.0, 4, 1.0, cm);
+      if (c > 0.7) cloudMass(r, 0.4, SKY_Y + 0.8, 3.0, 2.6, 3, 0.95, cm);
     }
 
     if (kind === 'rain' || kind === 'storm') {
       for (let i = 0; i < 18; i++) {
-        const m = add(art, dropGeo, mat.drop, [-3.2 + r() * 6.4, 0, 0.6 + r() * 1.8], 1.2);
+        const m = add(art, dropGeo, mat.drop, [-3.2 + r() * 6.4, 0, 1.8 + r() * 1.6], 1.2);
         fallers.push([m, 4 + r() * 1.5, r()]);
       }
     }
     if (kind === 'snow') {
       for (let i = 0; i < 24; i++) {
-        const m = add(art, sphereGeo, mat.snow, [-3.4 + r() * 6.8, 0, 0.4 + r() * 2], 0.12 + r() * 0.06);
+        const m = add(art, sphereGeo, mat.snow, [-3.4 + r() * 6.8, 0, 1.6 + r() * 1.8], 0.12 + r() * 0.06);
         fallers.push([m, 1 + r() * 0.5, r()]);
       }
     }
@@ -225,13 +243,13 @@ export function createWeather3D(container, { onTap } = {}) {
       const sh = new THREE.Shape();
       sh.moveTo(0.2, 0); sh.lineTo(-0.7, -1.4); sh.lineTo(-0.05, -1.4); sh.lineTo(-0.5, -2.8); sh.lineTo(0.9, -0.9); sh.lineTo(0.2, -0.9); sh.lineTo(0.7, 0);
       const g = new THREE.ExtrudeGeometry(sh, { depth: 0.3, bevelEnabled: true, bevelSize: 0.06, bevelThickness: 0.06, bevelSegments: 1 });
-      const bolt = add(art, g, mat.bolt, [0.3, SKY_Y - 1.6, 2.2]);
+      const bolt = add(art, g, mat.bolt, [0.3, SKY_Y - 1.6, 3.2]);
       floaters.push([bolt, 0.3, SKY_Y - 1.6, 0, 0.05]);
     }
     if (kind === 'fog') {
       for (let i = 0; i < 3; i++) {
         const g = new THREE.CapsuleGeometry(0.22, 5.4 - i * 1.3, 6, 16);
-        const m = add(art, g, mat.cloudLight, [0, SKY_Y - 2.2 - i * 0.6, 2]);
+        const m = add(art, g, mat.cloudLight, [0, SKY_Y - 2.2 - i * 0.6, 3]);
         m.rotation.z = Math.PI / 2;
         floaters.push([m, 0, SKY_Y - 2.2 - i * 0.6, i * 2, 0.35]);
       }
@@ -361,6 +379,11 @@ export function createWeather3D(container, { onTap } = {}) {
 
   return {
     setScene(kind, isDay, cover = 50, seed = 1) { buildArt(kind, isDay, cover, seed); setNight(!isDay); },
+    // phase: 0 = new, 0.25 = first quarter (right half lit), 0.5 = full, 0.75 = last quarter
+    setMoonPhase(phase) {
+      const a = phase * Math.PI * 2;
+      mat.moonPhase.uniforms.sunDir.value.set(Math.sin(a), 0, -Math.cos(a)).normalize();
+    },
     setText,
     destroy() {
       cancelAnimationFrame(raf);
