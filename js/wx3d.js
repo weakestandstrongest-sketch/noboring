@@ -182,19 +182,35 @@ export function createWeather3D(container, { onTap } = {}) {
   }
 
   // a cloud: a heap of squashed matte lumps, biggest in the middle
-  function cloudMass(r, cx, cy, cz, width, lumps, size, m, parent = art) {
+  // All clouds of one sky drift together, so they never slide through each other.
+  let drift = { phase: 0, amount: 0.22 };
+  const DRIFT_MARGIN = 0.22 + 0.08 + 0.15; // sideways drift + bob + a little air
+
+  // a cloud: a heap of squashed matte lumps, biggest in the middle.
+  // `avoid` ({ x, y, z, r }) is a sphere the cloud must stay clear of (the sun or
+  // moon): if any lump would touch it, the whole heap moves forward until none does.
+  function cloudMass(r, cx, cy, cz, width, lumps, size, m, parent = art, avoid = null) {
     const g = new THREE.Group();
+    let push = 0;
     for (let i = 0; i < lumps; i++) {
       const t = lumps === 1 ? 0.5 : i / (lumps - 1);
       const x = (t - 0.5) * width + (r() - 0.5) * 0.5;
       const edge = 1 - Math.abs(t - 0.5) * 1.3;
       const s = size * (0.45 + edge * 0.55) * (0.8 + r() * 0.4);
       const y = (r() - 0.3) * size * 0.6 + edge * size * 0.35;
-      add(g, sphereGeo, m, [x, y, (r() - 0.5) * size * 0.8], [s * (1.05 + r() * 0.25), s * 0.85, s]);
+      const z = (r() - 0.5) * size * 0.8;
+      const sx = s * (1.05 + r() * 0.25);
+      add(g, sphereGeo, m, [x, y, z], [sx, s * 0.85, s]);
+      if (avoid) {
+        const reach = avoid.r + Math.max(sx, s) + DRIFT_MARGIN;
+        const dx = cx + x - avoid.x, dy = cy + y - avoid.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 < reach * reach) push = Math.max(push, avoid.z + Math.sqrt(reach * reach - d2) - (cz + z));
+      }
     }
-    g.position.set(cx, cy, cz);
+    g.position.set(cx, cy, cz + push);
     parent.add(g);
-    floaters.push([g, cx, cy, r() * 6, 0.15 + r() * 0.15]);
+    floaters.push([g, cx, cy, drift.phase, drift.amount]);
   }
 
   function buildArt(kind, isDay, cover, seed) {
@@ -207,7 +223,10 @@ export function createWeather3D(container, { onTap } = {}) {
     const overcast = kind !== 'clear' && kind !== 'partly';
 
     // sun or moon, peeking out from behind the clouds
-    add(art, sphereGeo, isDay ? mat.sun : mat.moonPhase, [0, SKY_Y, 0.2], 2.6);
+    const body = { x: 0, y: SKY_Y, z: 0.2, r: 2.6 };
+    add(art, sphereGeo, isDay ? mat.sun : mat.moonPhase, [body.x, body.y, body.z], body.r);
+    drift = { phase: r() * 6, amount: 0.22 };
+    const cloud = (...a) => cloudMass(r, ...a, art, body);
     glow.intensity = isDay ? (overcast ? 2 : 7) : 0;
     if (!isDay) {      for (let i = 0; i < 10; i++) {
         const st = add(art, sphereGeo, mat.star, [-4.5 + r() * 9, SKY_Y - 2 + r() * 5.5, -2.8], 0.07);
@@ -219,15 +238,15 @@ export function createWeather3D(container, { onTap } = {}) {
     // clouds grow with cloud cover
     const c = Math.max(0, Math.min(1, cover / 100));
     if (overcast) {
-      cloudMass(r, -0.2, SKY_Y - 1.2, 2.0, 7.6, 9, 1.55, cm);
-      cloudMass(r, 0.6, SKY_Y + 0.3, 1.2, 4.2, 4, 1.4, cm);
+      cloud(-0.2, SKY_Y - 1.2, 2.0, 6.4, 9, 1.35, cm);
+      cloud(0.6, SKY_Y + 0.3, 1.2, 3.6, 4, 1.2, cm);
     } else if (c > 0.12 && c < 0.45) {
-      cloudMass(r, -2.4, SKY_Y - 1.3, 2.6, 2.6, 4, 0.9, cm);
-      if (c > 0.25) cloudMass(r, 2.9, SKY_Y - 0.8, 2.3, 1.6, 3, 0.65, cm);
+      cloud(-2.4, SKY_Y - 1.3, 2.6, 2.6, 4, 0.9, cm);
+      if (c > 0.25) cloud(2.9, SKY_Y - 0.8, 2.3, 1.6, 3, 0.65, cm);
     } else if (c >= 0.45) {
-      cloudMass(r, -1.8, SKY_Y - 1.4, 2.6, 4.2, 6, 1.2, cm);
-      cloudMass(r, 2.4, SKY_Y - 0.6, 2.2, 3.0, 4, 1.0, cm);
-      if (c > 0.7) cloudMass(r, 0.4, SKY_Y + 0.8, 3.0, 2.6, 3, 0.95, cm);
+      cloud(-1.8, SKY_Y - 1.4, 2.6, 4.2, 6, 1.2, cm);
+      cloud(2.4, SKY_Y - 0.6, 2.2, 3.0, 4, 1.0, cm);
+      if (c > 0.7) cloud(0.4, SKY_Y + 0.8, 3.0, 2.6, 3, 0.95, cm);
     }
 
     if (kind === 'rain' || kind === 'storm') {
@@ -459,6 +478,7 @@ export function createWeather3D(container, { onTap } = {}) {
   function cloudModel(info) {
     const g = new THREE.Group();
     const r = rng(23);
+    drift = { phase: 1.3, amount: 0.12 };
     const c = Math.max(0.12, Math.min(1, info.cloud / 100));
     cloudMass(r, -1.3, 0.5, 0.4, 3.6 * (0.6 + c * 0.4), 7, 0.85 + c * 0.55, mat.cloud, g);
     if (c > 0.3) cloudMass(r, 2.1, 1.2, -0.4, 2.6, 5, 0.65 + c * 0.45, mat.cloud, g);
